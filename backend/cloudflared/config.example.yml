@@ -1,0 +1,18 @@
+# Named Cloudflare Tunnel — stable HTTPS URL (does not change on restart).
+#
+# Setup (one time):
+#   1. winget install Cloudflare.cloudflared
+#   2. cloudflared tunnel login
+#   3. cloudflared tunnel create algo-backend
+#   4. Copy this file to config.yml and replace TUNNEL_ID + hostname
+#   5. cloudflared tunnel route dns algo-backend api.yourdomain.com
+#
+# Run: .\start-named-tunnel.ps1
+
+tunnel: TUNNEL_ID
+credentials-file: C:\Users\YOU\.cloudflared\TUNNEL_ID.json
+
+ingress:
+  - hostname: api.yourdomain.com
+    service: http://127.0.0.1:8002
+  - service: http_status:404

@@ -1,0 +1,10 @@
+venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+tools/
+cloudflared/
+*.ps1
+data/api_credentials.json
+.my_strategies.lock

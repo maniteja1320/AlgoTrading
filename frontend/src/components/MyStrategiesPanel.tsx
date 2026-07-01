@@ -1,0 +1,256 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Pencil, Trash2 } from 'lucide-react';
+import { api, LockedExitIf, Position, SavedStrategy, strategyTotalCashflowPnl, strategyTotalCashflowPnlPct, StrategyLegConfig } from '../api';
+import { EditStrategyModal } from './EditStrategyModal';
+import { formatEntryDays } from './EntryDaysPicker';
+import { formatExitConditions } from './ExitConditionsEditor';
+
+function getStrategyLegs(s: SavedStrategy): StrategyLegConfig[] {
+  if (s.legs?.length) return s.legs;
+  if (s.option_type) {
+    return [
+      {
+        option_type: s.option_type,
+        strike_type: s.strike_type ?? 'ATM',
+        expiry_slot: s.expiry_slot ?? 'today',
+        side: s.side ?? 'buy',
+        order_type: s.order_type ?? 'limit_order',
+        limit_price: s.limit_price,
+        size: s.size ?? 1,
+      },
+    ];
+  }
+  return [];
+}
+
+function formatExitIfDisplay(low?: number | null, high?: number | null): string {
+  if (low == null || high == null) return '';
+  const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return `< $${fmt(low)} or > $${fmt(high)}`;
+}
+
+function formatLegSummary(
+  leg: StrategyLegConfig,
+  index: number,
+  lockedExitIf?: Record<string, LockedExitIf>,
+) {
+  const lock = lockedExitIf
+    ? Object.values(lockedExitIf).find((l) => l.leg_index === index + 1)
+    : undefined;
+  let exit = '';
+  if (lock) {
+    exit = ` · Exit if ${formatExitIfDisplay(lock.low, lock.high)} (locked)`;
+  } else if (leg.exit_if_enabled) {
+    exit = ' · Exit if enabled (locked at entry)';
+  }
+  return `Leg ${index + 1}: ${leg.option_type.toUpperCase()} · ATM · ${leg.expiry_slot} · ${leg.side} · ${leg.size}${exit}`;
+}
+
+interface Props {
+  refreshKey?: number;
+  positions: Position[];
+}
+
+export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
+  const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [editing, setEditing] = useState<SavedStrategy | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api.getMyStrategies();
+      setStrategies(data.strategies);
+      setActiveId(data.active_id);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Failed to load saved strategies');
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [load, refreshKey]);
+
+  const onToggle = async (id: string) => {
+    setLoading(id);
+    setMsg(null);
+    try {
+      if (activeId === id) {
+        await api.deactivateMyStrategies();
+        setActiveId(null);
+        setMsg('Strategy stopped');
+      } else {
+        await api.activateMyStrategy(id);
+        setActiveId(id);
+        setMsg('Strategy started — entries on selected days at entry time; square-off on expiry at end time');
+      }
+      load();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Failed to update strategy');
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const onDelete = async (id: string) => {
+    if (!confirm('Delete this saved strategy?')) return;
+    try {
+      await api.deleteMyStrategy(id);
+      load();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
+
+  if (!strategies.length) {
+    return (
+      <div className="panel">
+        <div className="panel-header">My Strategies</div>
+        <div className="panel-body" style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+          No saved strategies yet. Configure a Custom strategy in the Strategies tab and click Save.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {editing && (
+        <EditStrategyModal
+          strategy={editing}
+          legs={getStrategyLegs(editing)}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            load();
+            setMsg(`Updated ${editing.name}`);
+          }}
+        />
+      )}
+
+      <div className="panel">
+        <div className="panel-header">My Strategies</div>
+        <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {msg && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{msg}</div>}
+
+          {strategies.map((s) => {
+            const running = activeId === s.id;
+            const totalPnl = running ? strategyTotalCashflowPnl(s, positions) : null;
+            const totalPnlPct = running ? strategyTotalCashflowPnlPct(s, positions) : null;
+            return (
+              <div
+                key={s.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 14,
+                  padding: 14,
+                  borderRadius: 10,
+                  border: `1px solid ${running ? 'var(--green)' : 'var(--border)'}`,
+                  background: running ? '#14532d22' : 'var(--bg-elevated)',
+                }}
+              >
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={running}
+                  aria-label={running ? 'Stop strategy' : 'Start strategy'}
+                  className={`toggle ${running ? 'toggle-on' : ''}`}
+                  disabled={loading !== null && loading !== s.id}
+                  onClick={() => onToggle(s.id)}
+                  style={{ marginTop: 2 }}
+                >
+                  <span className="toggle-thumb" />
+                </button>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600 }}>{s.name}</span>
+                    <span className={`badge ${running ? 'badge-live' : 'badge-offline'}`}>
+                      {running ? 'running' : s.status}
+                    </span>
+                    {running && totalPnl != null && (
+                      <span
+                        className={`mono ${totalPnl >= 0 ? 'positive' : 'negative'}`}
+                        style={{ fontSize: '0.85rem', fontWeight: 600, marginLeft: 'auto' }}
+                      >
+                        Live P&L: {totalPnl.toFixed(2)}
+                        {totalPnlPct != null && (
+                          <span style={{ fontWeight: 500, opacity: 0.85 }}>
+                            {' '}
+                            ({totalPnlPct >= 0 ? '+' : ''}
+                            {totalPnlPct.toFixed(1)}%)
+                          </span>
+                        )}
+                      </span>
+                    )}
+                    {running && totalPnl == null && (
+                      <span
+                        style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginLeft: 'auto' }}
+                      >
+                        Live P&L: —
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.6 }}>
+                    {getStrategyLegs(s).map((leg, i) => (
+                      <div key={i}>{formatLegSummary(leg, i, s.locked_exit_if)}</div>
+                    ))}
+                    <div style={{ marginTop: 4 }}>Entry days: {formatEntryDays(s.entry_days)}</div>
+                    <div>Entry: {s.entry_time} · Square-off: {s.end_time} IST</div>
+                    <div>Exit: {formatExitConditions(s.total_profit_pct, s.total_loss_pct)}</div>
+                    {s.combined_entry_premium != null && (
+                      <div>
+                        Combined entry premium: $
+                        {s.combined_entry_premium.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                      </div>
+                    )}
+                  </div>
+                  {s.logs && s.logs.length > 0 && (
+                    <pre
+                      style={{
+                        fontFamily: 'var(--mono)',
+                        fontSize: '0.68rem',
+                        marginTop: 8,
+                        color: 'var(--text-muted)',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {s.logs.slice(-3).join('\n')}
+                    </pre>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ padding: 6, opacity: running ? 0.4 : 1 }}
+                    disabled={running}
+                    onClick={() => setEditing(s)}
+                    title={running ? 'Stop strategy to edit' : 'Edit strategy'}
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ padding: 6 }}
+                    onClick={() => onDelete(s.id)}
+                    title="Delete"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+            Use the toggle to start or stop a strategy. Edit is locked while a strategy is running. Entries run on
+            selected days at entry time. Outside the exit-if band, legs square off on BTC breach. Inside the band,
+            exit on total profit or total loss, or at end time on expiry if neither is hit.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
