@@ -36,10 +36,13 @@ Do **not** commit `backend/.env` or `backend/data/api_credentials.json`.
 
 ## 3. Backend service
 
-1. **New Service** → same repo (or first deploy, then add second service)
-2. **Settings → Source → Root Directory:** `backend`
-3. Railway detects `backend/Dockerfile` and `railway.toml`
-4. **Settings → Networking → Generate Domain** → copy URL, e.g.  
+1. **New Service** → same repo
+2. **Settings → Source → Root Directory:** `backend` ← **required**
+3. **Settings → Config-as-code → Railway config file:** `/backend/railway.toml`  
+   (Config path is **absolute from repo root**, not relative to Root Directory.)
+4. **Settings → Build → Builder:** **Dockerfile** (if the deploy still uses Railpack, set this manually)
+5. Optional env var: `RAILWAY_DOCKERFILE_PATH` = `Dockerfile` (only if Root Directory is `backend`)
+6. **Settings → Networking → Generate Domain** → copy URL, e.g.  
    `https://delta-algo-api-production.up.railway.app`
 
 ### Backend environment variables
@@ -64,8 +67,10 @@ Open `https://YOUR-BACKEND.up.railway.app/health` → `{"status":"ok"}`
 ## 4. Frontend service
 
 1. **New Service** → same repo
-2. **Root Directory:** `frontend`
-3. **Variables** (must be set **before** or trigger a redeploy after adding):
+2. **Root Directory:** `frontend` ← **required**
+3. **Config-as-code file:** `/frontend/railway.toml`
+4. **Build → Builder:** **Dockerfile**
+5. **Variables** (set **before** deploy / redeploy after change):
 
 | Variable | Value |
 |----------|--------|
@@ -120,6 +125,7 @@ cd frontend; npm run dev
 
 | Issue | Fix |
 |-------|-----|
+| `start.sh not found` / Railpack can't build | **Root Directory** must be `backend` or `frontend`, not repo root. Set **Builder → Dockerfile** and config file `/backend/railway.toml` |
 | Frontend can't reach API | Check `VITE_API_URL`, redeploy frontend after changing it |
 | CORS error | Add exact frontend URL to `CORS_ORIGINS`, redeploy backend |
 | Build fails on frontend | Ensure `VITE_API_URL` is set before build |
