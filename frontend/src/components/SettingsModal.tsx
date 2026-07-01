@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { api, AccountConfig } from '../api';
+import { api, AccountConfig, isApiBaseConfigured } from '../api';
 
 interface Props {
   config: AccountConfig | null;
@@ -37,7 +37,12 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
       setLiveConfig(updated as AccountConfig);
       onSaved(updated as AccountConfig);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save');
+      const msg = e instanceof Error ? e.message : 'Failed to save';
+      setError(
+        msg.includes('Method Not Allowed') || msg.includes('Not Found')
+          ? 'Cannot reach the backend. Set BACKEND_URL on the frontend Railway service to your backend URL, then redeploy.'
+          : msg,
+      );
     } finally {
       setLoading(false);
     }
@@ -91,6 +96,13 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
           </button>
         </div>
         <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          { !isApiBaseConfigured() && (
+            <div style={{ padding: 10, borderRadius: 8, background: '#422006', color: '#fbbf24', fontSize: '0.8rem' }}>
+              Backend not linked. On Railway → frontend service → Variables, set{' '}
+              <strong>BACKEND_URL</strong> to your backend URL (e.g. https://xxx.up.railway.app), then redeploy.
+            </div>
+          )}
+
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
             Create API keys at{' '}
             <a href="https://india.delta.exchange/app/settings/api" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>

@@ -1,5 +1,16 @@
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
 
+/** True when API calls target a backend (direct URL or same-origin nginx proxy). */
+export function isApiBaseConfigured(): boolean {
+  if (BASE.length > 0) return true;
+  // Production Docker: nginx proxies /api when BACKEND_URL is set at runtime
+  return import.meta.env.PROD;
+}
+
+export function getApiBase(): string {
+  return BASE;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
