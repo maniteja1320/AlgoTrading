@@ -11,7 +11,7 @@ if [ -n "$BACKEND" ]; then
   SSL_LINES=""
   if echo "$BACKEND" | grep -q '^https://'; then
     SSL_LINES="proxy_ssl_server_name on;
-        proxy_ssl_verify on;"
+        proxy_ssl_verify off;"
   fi
   PROXY_BLOCK="location /api/ {
         proxy_pass ${BACKEND}/api/;

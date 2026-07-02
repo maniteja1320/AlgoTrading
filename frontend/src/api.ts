@@ -18,7 +18,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail ?? err));
+    const detail =
+      typeof err.detail === 'string'
+        ? err.detail
+        : typeof err.message === 'string'
+          ? err.message
+          : JSON.stringify(err.detail ?? err.message ?? err);
+    const suffix = res.status === 502 ? ' (frontend cannot reach backend — check BACKEND_URL on Railway)' : '';
+    throw new Error(`${detail}${suffix}`);
   }
   return res.json();
 }

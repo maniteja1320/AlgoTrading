@@ -39,9 +39,11 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to save';
       setError(
-        msg.includes('Method Not Allowed') || msg.includes('Not Found')
-          ? 'Cannot reach the backend. Set BACKEND_URL on the frontend Railway service to your backend URL, then redeploy.'
-          : msg,
+        msg.includes('502') || msg.includes('Application failed to respond')
+          ? 'Frontend cannot reach the backend (502). In Railway → frontend service → Variables, set BACKEND_URL to your backend URL with https:// (e.g. https://YOUR-BACKEND.up.railway.app), then redeploy the frontend service.'
+          : msg.includes('Method Not Allowed') || msg.includes('Not Found')
+            ? 'Cannot reach the backend. Set BACKEND_URL on the frontend Railway service to your backend URL, then redeploy.'
+            : msg,
       );
     } finally {
       setLoading(false);
