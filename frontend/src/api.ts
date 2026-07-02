@@ -116,6 +116,7 @@ export interface SavedStrategy {
   status: string;
   created_at: string;
   logs?: string[];
+  last_entry_date?: string | null;
   locked_exit_if?: Record<string, LockedExitIf>;
   combined_entry_premium?: number;
 }

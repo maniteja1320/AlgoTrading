@@ -7,6 +7,8 @@ from app.my_strategy_store import (
     clear_locked_exit_if,
     get_active_strategy,
     mark_squareoff_done,
+    set_combined_entry_premium,
+    set_entry_legs,
     set_locked_exit_if,
     try_claim_entry,
     was_squared_off,
@@ -52,14 +54,44 @@ def _exit_pct(saved: dict[str, Any], key: str) -> float | None:
     return float(val)
 
 
+def _open_positions_map(delta: DeltaService) -> dict[int, dict[str, Any]]:
+    """All open positions keyed by product_id (margined API — reliable entry_price)."""
+    try:
+        positions = delta.get_positions()
+    except Exception:
+        return {}
+    by_id: dict[int, dict[str, Any]] = {}
+    for pos in positions:
+        if not isinstance(pos, dict) or pos.get("size", 0) == 0:
+            continue
+        try:
+            by_id[int(pos["product_id"])] = pos
+        except (TypeError, ValueError, KeyError):
+            continue
+    return by_id
+
+
 def _open_position(
-    delta: DeltaService, product_id: int, symbol: str | None = None
+    delta: DeltaService,
+    product_id: int,
+    symbol: str | None = None,
+    positions_map: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    if positions_map is not None:
+        return positions_map.get(int(product_id))
     try:
         positions = delta.get_positions(product_id=product_id, symbol=symbol)
     except Exception:
         return None
     return next((p for p in positions if isinstance(p, dict) and p.get("size", 0) != 0), None)
+
+
+def _log_exit_if_pending(saved: dict[str, Any], message: str) -> None:
+    """Log exit-if wait status at most once per few minutes."""
+    recent = saved.get("logs") or []
+    if any("Exit-if lock waiting" in line for line in recent[-3:]):
+        return
+    append_log(saved["id"], message)
 
 
 def resolve_saved_legs(delta: DeltaService, saved: dict[str, Any]) -> list[dict[str, Any]]:
@@ -85,9 +117,13 @@ def resolve_saved_legs(delta: DeltaService, saved: dict[str, Any]) -> list[dict[
     return resolved
 
 
-def square_off_leg(delta: DeltaService, leg: dict[str, Any]) -> dict[str, Any] | None:
+def square_off_leg(
+    delta: DeltaService,
+    leg: dict[str, Any],
+    positions_map: dict[int, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     product_id = int(leg["product_id"])
-    open_pos = _open_position(delta, product_id, symbol=leg.get("symbol"))
+    open_pos = _open_position(delta, product_id, symbol=leg.get("symbol"), positions_map=positions_map)
     if not open_pos:
         return None
 
@@ -103,13 +139,140 @@ def square_off_leg(delta: DeltaService, leg: dict[str, Any]) -> dict[str, Any] |
     return {"symbol": leg.get("symbol"), "side": close_side, "size": size, "order": order}
 
 
-def square_off_all_legs(delta: DeltaService, resolved_legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def square_off_all_legs(
+    delta: DeltaService,
+    resolved_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for leg in resolved_legs:
-        result = square_off_leg(delta, leg)
+        result = square_off_leg(delta, leg, positions_map=positions_map)
         if result:
             results.append(result)
     return results
+
+
+def _monitoring_legs(saved: dict[str, Any], resolved_legs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use product IDs from entry time — ATM re-resolution can drift to a different strike."""
+    entry = saved.get("entry_legs")
+    return entry if entry else resolved_legs
+
+
+def _snapshots_from_locked(
+    saved: dict[str, Any],
+    leg_configs: list[dict[str, Any]],
+    resolved_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    locked = saved.get("locked_exit_if") or {}
+    snapshots: list[dict[str, Any]] = []
+    for pid, bounds in locked.items():
+        pos = positions_map.get(int(pid))
+        if not pos:
+            continue
+        leg_index = bounds.get("leg_index")
+        cfg = leg_configs[leg_index - 1] if leg_index and 0 < leg_index <= len(leg_configs) else {}
+        resolved = next((leg for leg in resolved_legs if leg.get("leg_index") == leg_index), {})
+        snapshots.append(
+            {
+                "product_id": int(pid),
+                "symbol": bounds.get("symbol"),
+                "side": cfg.get("side", "buy"),
+                "size": int(cfg.get("size", 1)),
+                "leg_index": leg_index,
+                "expiry_date": resolved.get("expiry_date", ""),
+                "exit_if_enabled": bool(cfg.get("exit_if_enabled")),
+                "atm_strike": bounds.get("entry_atm_strike"),
+            }
+        )
+    return snapshots
+
+
+def _persist_entry_legs(
+    sid: str,
+    saved: dict[str, Any],
+    resolved_legs: list[dict[str, Any]],
+    leg_configs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+) -> None:
+    if saved.get("entry_legs"):
+        return
+    snapshots: list[dict[str, Any]] = []
+    for cfg, leg in zip(leg_configs, resolved_legs, strict=False):
+        pid = int(leg["product_id"])
+        if not positions_map.get(pid):
+            continue
+        snapshots.append(
+            {
+                "product_id": pid,
+                "symbol": leg.get("symbol"),
+                "side": cfg.get("side", leg.get("side", "buy")),
+                "size": int(cfg.get("size", leg.get("size", 1))),
+                "leg_index": leg.get("leg_index"),
+                "expiry_date": leg.get("expiry_date"),
+                "exit_if_enabled": bool(cfg.get("exit_if_enabled")),
+                "atm_strike": leg.get("atm_strike"),
+            }
+        )
+    if not snapshots:
+        snapshots = _snapshots_from_locked(saved, leg_configs, resolved_legs, positions_map)
+    if snapshots:
+        set_entry_legs(sid, snapshots)
+
+
+def _collect_open_leg_positions(
+    saved: dict[str, Any],
+    resolved_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+) -> list[tuple[dict[str, Any], dict[str, Any]]] | None:
+    """Return (leg, position) pairs when every leg is open; None if any leg is missing."""
+    leg_positions: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for leg in resolved_legs:
+        pos = positions_map.get(int(leg["product_id"]))
+        if not pos:
+            if saved.get("last_entry_date") == today_ist_str():
+                _log_exit_if_pending(
+                    saved,
+                    f"Entry premium lock waiting: no open position yet for {leg.get('symbol')}",
+                )
+            return None
+        leg_positions.append((leg, pos))
+    return leg_positions
+
+
+def _try_lock_combined_entry_premium(
+    saved: dict[str, Any],
+    resolved_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+) -> float | None:
+    """Persist combined entry premium once all legs are open (independent of exit-if)."""
+    sid = saved["id"]
+    if saved.get("combined_entry_premium"):
+        return float(saved["combined_entry_premium"])
+
+    if not resolved_legs or not saved.get("last_entry_date"):
+        return None
+
+    leg_positions = _collect_open_leg_positions(saved, resolved_legs, positions_map)
+    if not leg_positions:
+        return None
+
+    open_positions = [pos for _leg, pos in leg_positions]
+    combined = combined_entry_premium(open_positions)
+    if combined <= 0:
+        if saved.get("last_entry_date") == today_ist_str():
+            _log_exit_if_pending(saved, "Entry premium lock waiting: entry prices not available yet")
+        return None
+
+    premium_parts = [
+        f"{leg.get('symbol')} ${leg_entry_premium(pos):,.2f}" for leg, pos in leg_positions
+    ]
+    append_log(
+        sid,
+        f"Combined entry premium ${combined:,.2f} ({' + '.join(premium_parts)})",
+    )
+    set_combined_entry_premium(sid, combined)
+    return combined
 
 
 def _try_lock_exit_if(
@@ -117,6 +280,7 @@ def _try_lock_exit_if(
     delta: DeltaService,
     resolved_legs: list[dict[str, Any]],
     leg_configs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     sid = saved["id"]
     exit_pairs = [
@@ -132,23 +296,29 @@ def _try_lock_exit_if(
     if not pending:
         return
 
-    open_positions: list[dict[str, Any]] = []
-    leg_positions: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for leg in resolved_legs:
-        pos = _open_position(delta, int(leg["product_id"]), symbol=leg.get("symbol"))
-        if not pos:
-            return
-        open_positions.append(pos)
-        leg_positions.append((leg, pos))
+    if positions_map is None:
+        positions_map = _open_positions_map(delta)
 
-    combined = combined_entry_premium(open_positions)
+    leg_positions = _collect_open_leg_positions(saved, resolved_legs, positions_map)
+    if not leg_positions:
+        return
+
+    combined = saved.get("combined_entry_premium")
+    if not combined:
+        open_positions = [pos for _leg, pos in leg_positions]
+        combined = combined_entry_premium(open_positions)
+    else:
+        combined = float(combined)
+
     if combined <= 0:
+        if saved.get("last_entry_date") == today_ist_str():
+            _log_exit_if_pending(saved, "Exit-if lock waiting: entry prices not available yet")
         return
 
     new_locks: dict[str, Any] = {}
     for _cfg, leg in pending:
         pid = str(leg["product_id"])
-        pos = _open_position(delta, int(leg["product_id"]), symbol=leg.get("symbol"))
+        pos = positions_map.get(int(leg["product_id"]))
         if not pos:
             continue
         entry_atm = float(leg["atm_strike"])
@@ -163,14 +333,6 @@ def _try_lock_exit_if(
         }
 
     if new_locks:
-        premium_parts = [
-            f"{leg.get('symbol')} ${leg_entry_premium(pos):,.2f}"
-            for leg, pos in leg_positions
-        ]
-        append_log(
-            sid,
-            f"Combined entry premium ${combined:,.2f} ({' + '.join(premium_parts)})",
-        )
         for _cfg, leg in pending:
             pid = str(leg["product_id"])
             if pid not in new_locks:
@@ -193,40 +355,22 @@ def _get_btc_futures_price(delta: DeltaService) -> float | None:
         return None
 
 
-def _btc_in_exit_if_range(
-    saved: dict[str, Any],
-    btc_price: float,
-    leg_configs: list[dict[str, Any]],
-    resolved_legs: list[dict[str, Any]],
-) -> bool:
-    """True when BTC is between exit-if bounds for all exit-if legs (safe zone for P&L monitoring)."""
-    exit_if_legs = [
-        (cfg, leg)
-        for cfg, leg in zip(leg_configs, resolved_legs, strict=False)
-        if cfg.get("exit_if_enabled")
-    ]
-    if not exit_if_legs:
-        return True
-
+def _btc_in_exit_if_range(saved: dict[str, Any], btc_price: float) -> bool:
+    """True when BTC is inside the locked exit-if band (safe zone for P&L monitoring)."""
     locked = saved.get("locked_exit_if") or {}
     if not locked:
-        return False
+        return True
 
-    for _cfg, leg in exit_if_legs:
-        bounds = locked.get(str(leg["product_id"]))
-        if not bounds:
-            return False
-        low_f, high_f = float(bounds["low"]), float(bounds["high"])
-        if not (low_f < btc_price < high_f):
-            return False
-    return True
+    bounds = next(iter(locked.values()))
+    low_f, high_f = float(bounds["low"]), float(bounds["high"])
+    return low_f < btc_price < high_f
 
 
 def _check_exit_if_price(
     saved: dict[str, Any],
     delta: DeltaService,
-    resolved_legs: list[dict[str, Any]],
-    leg_configs: list[dict[str, Any]],
+    monitoring_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     sid = saved["id"]
     locked = saved.get("locked_exit_if") or {}
@@ -238,38 +382,49 @@ def _check_exit_if_price(
         append_log(sid, "Exit if skipped: could not fetch BTC futures price")
         return
 
-    for leg_cfg, leg in zip(leg_configs, resolved_legs, strict=False):
-        if not leg_cfg.get("exit_if_enabled"):
-            continue
-        pid = str(leg["product_id"])
-        bounds = locked.get(pid)
-        if not bounds:
-            continue
+    if positions_map is None:
+        positions_map = _open_positions_map(delta)
 
-        if not _open_position(delta, int(leg["product_id"]), symbol=leg.get("symbol")):
+    breach: tuple[str, dict[str, Any], float, float] | None = None
+    for pid, bounds in locked.items():
+        if not positions_map.get(int(pid)):
             continue
-
         low_f, high_f = float(bounds["low"]), float(bounds["high"])
         if btc_price <= low_f or btc_price >= high_f:
-            try:
-                result = square_off_leg(delta, leg)
-                if result:
-                    clear_locked_exit_if(sid, pid)
-                    append_log(
-                        sid,
-                        f"Exit if {leg.get('symbol')}: BTC ${btc_price:,.0f} outside "
-                        f"(${low_f:,.0f}–${high_f:,.0f}) — squared off",
-                    )
-            except Exception as e:
-                append_log(sid, f"Exit if failed {leg.get('symbol')}: {e}")
+            breach = (pid, bounds, low_f, high_f)
+            break
+
+    if not breach:
+        return
+
+    pid, bounds, low_f, high_f = breach
+    try:
+        results = square_off_all_legs(delta, monitoring_legs, positions_map=positions_map)
+        if results:
+            clear_locked_exit_if(sid)
+            append_log(
+                sid,
+                f"Exit if: BTC ${btc_price:,.0f} outside (${low_f:,.0f}–${high_f:,.0f}) "
+                f"— squared off {len(results)} leg(s)",
+            )
+            for r in results:
+                append_log(sid, f"  {r['symbol']}: {r['side']} {r['size']}")
+        else:
+            append_log(
+                sid,
+                f"Exit if breach (BTC ${btc_price:,.0f} vs ${low_f:,.0f}–${high_f:,.0f}) "
+                f"but no open positions found to close",
+            )
+    except Exception as e:
+        append_log(sid, f"Exit if failed ({bounds.get('symbol', pid)}): {e}")
 
 
 def _check_pnl_exit(
     saved: dict[str, Any],
     delta: DeltaService,
-    resolved_legs: list[dict[str, Any]],
-    leg_configs: list[dict[str, Any]],
+    monitoring_legs: list[dict[str, Any]],
     btc_price: float | None,
+    positions_map: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     sid = saved["id"]
     profit_target = _exit_pct(saved, "total_profit_pct")
@@ -277,11 +432,11 @@ def _check_pnl_exit(
     if profit_target is None and loss_limit is None:
         return
 
-    if btc_price is not None and not _btc_in_exit_if_range(saved, btc_price, leg_configs, resolved_legs):
+    if btc_price is not None and not _btc_in_exit_if_range(saved, btc_price):
         return
 
-    open_legs = get_open_positions_for_legs(delta, resolved_legs)
-    if len(open_legs) < len(resolved_legs):
+    open_legs = get_open_positions_for_legs(delta, monitoring_legs)
+    if len(open_legs) < len(monitoring_legs):
         return
 
     pnl_pct = compute_combined_pnl_pct(open_legs)
@@ -292,8 +447,11 @@ def _check_pnl_exit(
     if not reason:
         return
 
+    if positions_map is None:
+        positions_map = _open_positions_map(delta)
+
     try:
-        results = square_off_all_legs(delta, resolved_legs)
+        results = square_off_all_legs(delta, monitoring_legs, positions_map=positions_map)
         append_log(
             sid,
             f"Exit on {reason} (combined P&L {pnl_pct:.2f}%): squared off {len(results)} leg(s)",
@@ -324,24 +482,32 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
 
     leg_configs = _leg_configs(saved)
     resolved_legs = resolve_saved_legs(delta, saved)
+    positions_map = _open_positions_map(delta)
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
 
-    _try_lock_exit_if(saved, delta, resolved_legs, leg_configs)
+    _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
+    saved = get_active_strategy() or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
+
+    _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
+    saved = get_active_strategy() or saved
+    _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
     saved = get_active_strategy() or saved
 
     btc_price = _get_btc_futures_price(delta)
-    _check_exit_if_price(saved, delta, resolved_legs, leg_configs)
+    _check_exit_if_price(saved, delta, monitoring_legs, positions_map)
     saved = get_active_strategy() or saved
-    _check_pnl_exit(saved, delta, resolved_legs, leg_configs, btc_price)
+    _check_pnl_exit(saved, delta, monitoring_legs, btc_price, positions_map)
 
     if is_at_or_after(end_time):
-        for leg in resolved_legs:
+        for leg in monitoring_legs:
             expiry = leg["expiry_date"]
             if not is_expiry_calendar_day(expiry):
                 continue
             if was_squared_off(sid, expiry):
                 continue
             try:
-                result = square_off_leg(delta, leg)
+                result = square_off_leg(delta, leg, positions_map=positions_map)
                 if result:
                     clear_locked_exit_if(sid, str(leg["product_id"]))
                     append_log(
@@ -363,9 +529,17 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     if not is_at_or_after(entry_time):
         return
 
-    if _legs_already_open(delta, resolved_legs):
+    if _legs_already_open(delta, monitoring_legs):
         append_log(saved["id"], "Entry skipped: open positions already exist for all legs")
         try_claim_entry(saved["id"], today)
+        saved = get_active_strategy() or saved
+        positions_map = _open_positions_map(delta)
+        _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
+        saved = get_active_strategy() or saved
+        monitoring_legs = _monitoring_legs(saved, resolved_legs)
+        _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
+        saved = get_active_strategy() or saved
+        _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
         return
 
     if not try_claim_entry(saved["id"], today):
@@ -382,3 +556,12 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     append_log(sid, f"Entry placed on {today} at {entry_time}: {len(result.get('orders', []))} order(s)")
     for line in strat.state.logs[-8:]:
         append_log(sid, line)
+
+    saved = get_active_strategy() or saved
+    positions_map = _open_positions_map(delta)
+    _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
+    saved = get_active_strategy() or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
+    _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
+    saved = get_active_strategy() or saved
+    _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)

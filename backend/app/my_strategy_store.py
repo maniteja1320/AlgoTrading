@@ -87,6 +87,7 @@ def update_strategy(strategy_id: str, payload: dict[str, Any]) -> dict[str, Any]
                 "squareoff_dates",
                 "locked_exit_if",
                 "combined_entry_premium",
+                "entry_legs",
             ):
                 updated.pop(key, None)
             data["strategies"][i] = updated
@@ -118,6 +119,7 @@ def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
             s["squareoff_dates"] = []
             s["locked_exit_if"] = {}
             s.pop("combined_entry_premium", None)
+            s.pop("entry_legs", None)
         elif s.get("status") == "running":
             s["status"] = "saved"
     _write(data)
@@ -175,6 +177,24 @@ def try_claim_entry(strategy_id: str, date_str: str) -> bool:
                 _write(data)
                 return True
         return False
+
+
+def set_entry_legs(strategy_id: str, legs: list[dict[str, Any]]) -> None:
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            s["entry_legs"] = legs
+            break
+    _write(data)
+
+
+def set_combined_entry_premium(strategy_id: str, premium: float) -> None:
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            s["combined_entry_premium"] = premium
+            break
+    _write(data)
 
 
 def set_locked_exit_if(strategy_id: str, locks: dict[str, Any], combined_entry_premium: float | None = None) -> None:

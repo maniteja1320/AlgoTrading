@@ -160,6 +160,9 @@ class DeltaService:
             if fetched is not None:
                 mark = fetched
         row["mark_price"] = str(mark) if mark > 0 else ""
+
+        entry = self._parse_amount(row.get("entry_price") or row.get("average_entry_price"))
+        row["entry_price"] = str(entry) if entry > 0 else ""
         return row
 
     @staticmethod

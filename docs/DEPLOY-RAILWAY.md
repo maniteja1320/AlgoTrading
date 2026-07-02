@@ -74,10 +74,27 @@ Open `https://YOUR-BACKEND.up.railway.app/health` → `{"status":"ok"}`
 
 | Variable | Value |
 |----------|--------|
-| `BACKEND_URL` | `https://YOUR-BACKEND.up.railway.app` (no trailing slash) — **runtime proxy, no rebuild needed** |
-| `VITE_API_URL` | *(optional)* only if not using `BACKEND_URL`; requires rebuild |
+| `BACKEND_URL` | Backend URL — see options below |
 
-`BACKEND_URL` makes nginx proxy `/api` and `/health` to your backend. The app uses same-origin requests, so Settings Save works without baking the URL into the build.
+**Option A — Private network (recommended, same Railway project):**
+
+In the **frontend** service variables, reference the backend service:
+
+```
+BACKEND_URL=http://${{Backend.RAILWAY_PRIVATE_DOMAIN}}:${{Backend.PORT}}
+```
+
+Replace `Backend` with your backend service name exactly as shown in Railway.
+
+**Option B — Public HTTPS URL:**
+
+```
+BACKEND_URL=https://YOUR-BACKEND.up.railway.app
+```
+
+No trailing slash. If you get 502 errors, prefer Option A.
+
+Redeploy frontend after setting `BACKEND_URL`.
 
 4. **Networking → Generate Domain** → e.g. `https://delta-algo-web.up.railway.app`
 5. Update backend `CORS_ORIGINS` with this URL → redeploy backend

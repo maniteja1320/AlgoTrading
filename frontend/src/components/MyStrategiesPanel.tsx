@@ -200,6 +200,11 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
                     <div style={{ marginTop: 4 }}>Entry days: {formatEntryDays(s.entry_days)}</div>
                     <div>Entry: {s.entry_time} · Square-off: {s.end_time} IST</div>
                     <div>Exit: {formatExitConditions(s.total_profit_pct, s.total_loss_pct)}</div>
+                    {running && s.combined_entry_premium == null && s.last_entry_date && (
+                      <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                        Combined entry premium: locking at fill…
+                      </div>
+                    )}
                     {s.combined_entry_premium != null && (
                       <div>
                         Combined entry premium: $
