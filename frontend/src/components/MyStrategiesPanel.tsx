@@ -53,7 +53,6 @@ interface Props {
 
 export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<SavedStrategy | null>(null);
@@ -62,7 +61,6 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
     try {
       const data = await api.getMyStrategies();
       setStrategies(data.strategies);
-      setActiveId(data.active_id);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Failed to load saved strategies');
     }
@@ -77,14 +75,14 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
   const onToggle = async (id: string) => {
     setLoading(id);
     setMsg(null);
+    const strategy = strategies.find((s) => s.id === id);
+    const running = strategy?.status === 'running';
     try {
-      if (activeId === id) {
-        await api.deactivateMyStrategies();
-        setActiveId(null);
+      if (running) {
+        await api.deactivateMyStrategy(id);
         setMsg('Strategy stopped');
       } else {
         await api.activateMyStrategy(id);
-        setActiveId(id);
         setMsg('Strategy started — entries on selected days at entry time; square-off on expiry at end time');
       }
       load();
@@ -136,7 +134,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
           {msg && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{msg}</div>}
 
           {strategies.map((s) => {
-            const running = activeId === s.id;
+            const running = s.status === 'running';
             const totalPnl = running ? strategyTotalCashflowPnl(s, positions) : null;
             const totalPnlPct = running ? strategyTotalCashflowPnlPct(s, positions) : null;
             return (
@@ -250,9 +248,10 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
           })}
 
           <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-            Use the toggle to start or stop a strategy. Edit is locked while a strategy is running. Entries run on
-            selected days at entry time. Outside the exit-if band, legs square off on BTC breach. Inside the band,
-            exit on total profit or total loss, or at end time on expiry if neither is hit.
+            Use the toggle to start or stop each strategy independently. Multiple strategies can run at the same time.
+            Edit is locked while a strategy is running. Entries run on selected days at entry time. Outside the exit-if
+            band, legs square off on BTC breach. Inside the band, exit on total profit or total loss, or at end time on
+            expiry if neither is hit.
           </p>
         </div>
       </div>

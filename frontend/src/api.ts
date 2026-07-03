@@ -246,13 +246,17 @@ export const api = {
   stopStrategy: (body: { strategy_id: string }) =>
     request('/api/strategies/stop', { method: 'POST', body: JSON.stringify(body) }),
   getMyStrategies: () =>
-    request<{ strategies: SavedStrategy[]; active_id: string | null }>('/api/my-strategies'),
+    request<{ strategies: SavedStrategy[]; active_ids: string[]; active_id: string | null }>(
+      '/api/my-strategies',
+    ),
   saveMyStrategy: (body: SavedStrategyPayload) =>
     request<SavedStrategy>('/api/my-strategies', { method: 'POST', body: JSON.stringify(body) }),
   updateMyStrategy: (id: string, body: SavedStrategyPayload) =>
     request<SavedStrategy>(`/api/my-strategies/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   activateMyStrategy: (id: string) =>
     request<SavedStrategy>(`/api/my-strategies/${id}/activate`, { method: 'POST' }),
+  deactivateMyStrategy: (id: string) =>
+    request(`/api/my-strategies/${id}/deactivate`, { method: 'POST' }),
   deactivateMyStrategies: () =>
     request('/api/my-strategies/deactivate', { method: 'POST' }),
   deleteMyStrategy: (id: string) =>

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.delta_service import get_delta_service
-from app.my_strategy_store import append_log, get_active_strategy
+from app.my_strategy_store import append_log, get_running_strategies
 from app.saved_strategy_executor import execute_saved_strategy_tick
 
 logger = logging.getLogger("uvicorn.error")
@@ -17,21 +17,24 @@ async def _run_saved_strategy_loop() -> None:
     while True:
         try:
             await asyncio.sleep(30)
-            saved = get_active_strategy()
-            if not saved:
+            running = get_running_strategies()
+            if not running:
                 continue
 
             delta = get_delta_service()
             if not delta.configured:
-                append_log(saved["id"], "Skipped: API credentials not configured")
+                for saved in running:
+                    append_log(saved["id"], "Skipped: API credentials not configured")
                 continue
 
-            execute_saved_strategy_tick(saved, delta)
+            for saved in running:
+                try:
+                    execute_saved_strategy_tick(saved, delta)
+                except Exception as e:
+                    logger.exception("Saved strategy runner error for %s", saved.get("id"))
+                    append_log(saved["id"], f"Error: {e}")
         except Exception as e:
             logger.exception("Saved strategy runner error")
-            saved = get_active_strategy()
-            if saved:
-                append_log(saved["id"], f"Error: {e}")
 
 
 @asynccontextmanager

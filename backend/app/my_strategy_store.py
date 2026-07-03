@@ -53,7 +53,22 @@ def _write(data: dict[str, Any]) -> None:
 
 def list_strategies() -> dict[str, Any]:
     data = _read()
-    return {"strategies": data.get("strategies", []), "active_id": data.get("active_id")}
+    strategies = data.get("strategies", [])
+    active_ids = [s["id"] for s in strategies if s.get("status") == "running"]
+    return {
+        "strategies": strategies,
+        "active_ids": active_ids,
+        "active_id": active_ids[0] if len(active_ids) == 1 else None,
+    }
+
+
+def _strategy_by_id(data: dict[str, Any], strategy_id: str) -> dict[str, Any] | None:
+    return next((s for s in data.get("strategies", []) if s.get("id") == strategy_id), None)
+
+
+def _is_running(data: dict[str, Any], strategy_id: str) -> bool:
+    s = _strategy_by_id(data, strategy_id)
+    return bool(s and s.get("status") == "running")
 
 
 def save_strategy(payload: dict[str, Any]) -> dict[str, Any]:
@@ -71,7 +86,7 @@ def save_strategy(payload: dict[str, Any]) -> dict[str, Any]:
 
 def update_strategy(strategy_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     data = _read()
-    if data.get("active_id") == strategy_id:
+    if _is_running(data, strategy_id):
         return None
     for i, s in enumerate(data.get("strategies", [])):
         if s.get("id") == strategy_id:
@@ -101,18 +116,15 @@ def delete_strategy(strategy_id: str) -> bool:
     data = _read()
     before = len(data.get("strategies", []))
     data["strategies"] = [s for s in data.get("strategies", []) if s.get("id") != strategy_id]
-    if data.get("active_id") == strategy_id:
-        data["active_id"] = None
     _write(data)
     return len(data["strategies"]) < before
 
 
 def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
     data = _read()
-    match = next((s for s in data.get("strategies", []) if s.get("id") == strategy_id), None)
+    match = _strategy_by_id(data, strategy_id)
     if not match:
         return None
-    data["active_id"] = strategy_id
     for s in data["strategies"]:
         if s["id"] == strategy_id:
             s["status"] = "running"
@@ -122,27 +134,35 @@ def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
             s["locked_exit_if"] = {}
             s.pop("combined_entry_premium", None)
             s.pop("entry_legs", None)
-        elif s.get("status") == "running":
-            s["status"] = "saved"
+            break
     _write(data)
     return match
 
 
-def deactivate_strategy() -> None:
+def deactivate_strategy(strategy_id: str | None = None) -> None:
     data = _read()
-    data["active_id"] = None
     for s in data.get("strategies", []):
-        if s.get("status") == "running":
+        if s.get("status") != "running":
+            continue
+        if strategy_id is None or s.get("id") == strategy_id:
             s["status"] = "saved"
     _write(data)
 
 
-def get_active_strategy() -> dict[str, Any] | None:
+def get_running_strategies() -> list[dict[str, Any]]:
     data = _read()
-    active_id = data.get("active_id")
-    if not active_id:
-        return None
-    return next((s for s in data.get("strategies", []) if s.get("id") == active_id), None)
+    return [s for s in data.get("strategies", []) if s.get("status") == "running"]
+
+
+def get_strategy_by_id(strategy_id: str) -> dict[str, Any] | None:
+    data = _read()
+    return _strategy_by_id(data, strategy_id)
+
+
+def get_active_strategy() -> dict[str, Any] | None:
+    """First running strategy (legacy). Prefer get_running_strategies()."""
+    running = get_running_strategies()
+    return running[0] if running else None
 
 
 def append_log(strategy_id: str, message: str) -> None:

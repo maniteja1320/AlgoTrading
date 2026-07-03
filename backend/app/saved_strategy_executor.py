@@ -5,7 +5,7 @@ from app.exit_if_utils import combined_entry_premium, compute_exit_if_bounds, le
 from app.my_strategy_store import (
     append_log,
     clear_locked_exit_if,
-    get_active_strategy,
+    get_strategy_by_id,
     mark_leg_squared_off,
     set_combined_entry_premium,
     set_entry_legs,
@@ -486,17 +486,17 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
 
     _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
 
     _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
     _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
 
     btc_price = _get_btc_futures_price(delta)
     _check_exit_if_price(saved, delta, monitoring_legs, positions_map)
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
     _check_pnl_exit(saved, delta, monitoring_legs, btc_price, positions_map)
 
     if is_at_or_after(end_time):
@@ -535,13 +535,13 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     if _legs_already_open(delta, monitoring_legs):
         append_log(saved["id"], "Entry skipped: open positions already exist for all legs")
         try_claim_entry(saved["id"], today)
-        saved = get_active_strategy() or saved
+        saved = get_strategy_by_id(sid) or saved
         positions_map = _open_positions_map(delta)
         _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
-        saved = get_active_strategy() or saved
+        saved = get_strategy_by_id(sid) or saved
         monitoring_legs = _monitoring_legs(saved, resolved_legs)
         _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
-        saved = get_active_strategy() or saved
+        saved = get_strategy_by_id(sid) or saved
         _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
         return
 
@@ -560,11 +560,11 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     for line in strat.state.logs[-8:]:
         append_log(sid, line)
 
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
     positions_map = _open_positions_map(delta)
     _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
     _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
-    saved = get_active_strategy() or saved
+    saved = get_strategy_by_id(sid) or saved
     _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
