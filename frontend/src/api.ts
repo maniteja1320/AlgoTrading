@@ -126,6 +126,42 @@ export interface SavedStrategy {
   last_entry_date?: string | null;
   locked_exit_if?: Record<string, LockedExitIf>;
   combined_entry_premium?: number;
+  entry_legs?: Array<{ product_id: number; size?: number }>;
+}
+
+function strategyLegConfigs(strategy: SavedStrategy): StrategyLegConfig[] {
+  if (strategy.legs?.length) return strategy.legs;
+  if (strategy.option_type) {
+    return [
+      {
+        option_type: strategy.option_type,
+        strike_type: strategy.strike_type ?? 'ATM',
+        expiry_slot: strategy.expiry_slot ?? 'today',
+        side: strategy.side ?? 'buy',
+        order_type: strategy.order_type ?? 'limit_order',
+        limit_price: strategy.limit_price,
+        size: strategy.size ?? 1,
+      },
+    ];
+  }
+  return [];
+}
+
+/** Lot size for P&L % — from open positions when available, else strategy leg config. */
+export function strategyEntrySize(strategy: SavedStrategy, positions: Position[]): number {
+  const openLegs = strategyLegPositions(strategy, positions);
+  if (openLegs.length) {
+    const sizes = openLegs.map((p) => Math.abs(p.size)).filter((s) => s > 0);
+    if (sizes.length) return sizes[0];
+  }
+  const entryLegs = strategy.entry_legs;
+  if (entryLegs?.length) {
+    const sizes = entryLegs.map((l) => l.size ?? 0).filter((s) => s > 0);
+    if (sizes.length) return sizes[0];
+  }
+  const configs = strategyLegConfigs(strategy);
+  if (configs.length) return configs[0].size ?? 1;
+  return strategy.size ?? 1;
 }
 
 /** Product IDs for strategy legs (from locked exit-if at entry). */
@@ -149,13 +185,14 @@ export function strategyTotalCashflowPnl(strategy: SavedStrategy, positions: Pos
   return legs.reduce((sum, p) => sum + positionTotalCashflow(p), 0);
 }
 
-/** Live total profit %: (live total P&L × 1000 × 100) / combined entry premium (locked at entry). */
+/** Live total profit %: (live total P&L × 1000 × 100) / (combined entry premium × size). */
 export function strategyTotalCashflowPnlPct(strategy: SavedStrategy, positions: Position[]): number | null {
   const totalPnl = strategyTotalCashflowPnl(strategy, positions);
   const combinedPremium = strategy.combined_entry_premium;
-  if (totalPnl == null || combinedPremium == null || combinedPremium <= 0) return null;
+  const size = strategyEntrySize(strategy, positions);
+  if (totalPnl == null || combinedPremium == null || combinedPremium <= 0 || size <= 0) return null;
 
-  return (totalPnl * 1000 * 100) / combinedPremium;
+  return (totalPnl * 1000 * 100) / (combinedPremium * size);
 }
 
 export interface SavedStrategyPayload {
