@@ -6,12 +6,12 @@ from app.my_strategy_store import (
     append_log,
     clear_locked_exit_if,
     get_active_strategy,
-    mark_squareoff_done,
+    mark_leg_squared_off,
     set_combined_entry_premium,
     set_entry_legs,
     set_locked_exit_if,
     try_claim_entry,
-    was_squared_off,
+    was_leg_squared_off,
 )
 from app.option_resolver import resolve_custom_option
 from app.pnl_utils import compute_combined_pnl_pct, get_open_positions_for_legs, should_exit_on_pnl
@@ -500,23 +500,26 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     _check_pnl_exit(saved, delta, monitoring_legs, btc_price, positions_map)
 
     if is_at_or_after(end_time):
+        positions_map = _open_positions_map(delta)
         for leg in monitoring_legs:
             expiry = leg["expiry_date"]
+            pid = str(leg["product_id"])
             if not is_expiry_calendar_day(expiry):
                 continue
-            if was_squared_off(sid, expiry):
+            if was_leg_squared_off(sid, pid):
                 continue
             try:
                 result = square_off_leg(delta, leg, positions_map=positions_map)
                 if result:
-                    clear_locked_exit_if(sid, str(leg["product_id"]))
+                    clear_locked_exit_if(sid, pid)
                     append_log(
                         sid,
                         f"Square-off {result['symbol']}: {result['side']} {result['size']} @ end time on expiry {expiry}",
                     )
+                    mark_leg_squared_off(sid, pid)
                 else:
                     append_log(sid, f"No open position to square off for {leg.get('symbol')} on {expiry}")
-                mark_squareoff_done(sid, expiry)
+                    mark_leg_squared_off(sid, pid)
             except Exception as e:
                 append_log(sid, f"Square-off failed {leg.get('symbol')}: {e}")
 

@@ -85,6 +85,7 @@ def update_strategy(strategy_id: str, payload: dict[str, Any]) -> dict[str, Any]
             for key in (
                 "last_entry_date",
                 "squareoff_dates",
+                "squared_off_product_ids",
                 "locked_exit_if",
                 "combined_entry_premium",
                 "entry_legs",
@@ -117,6 +118,7 @@ def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
             s["status"] = "running"
             s["last_entry_date"] = None
             s["squareoff_dates"] = []
+            s["squared_off_product_ids"] = []
             s["locked_exit_if"] = {}
             s.pop("combined_entry_premium", None)
             s.pop("entry_legs", None)
@@ -222,6 +224,26 @@ def clear_locked_exit_if(strategy_id: str, product_id: str | None = None) -> Non
                     s.pop("combined_entry_premium", None)
             break
     _write(data)
+
+
+def mark_leg_squared_off(strategy_id: str, product_id: str) -> None:
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            done = s.setdefault("squared_off_product_ids", [])
+            pid = str(product_id)
+            if pid not in done:
+                done.append(pid)
+            break
+    _write(data)
+
+
+def was_leg_squared_off(strategy_id: str, product_id: str) -> bool:
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            return str(product_id) in s.get("squared_off_product_ids", [])
+    return False
 
 
 def mark_squareoff_done(strategy_id: str, expiry_date: str) -> None:
