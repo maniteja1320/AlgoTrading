@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
-import { api, LockedExitIf, Position, SavedStrategy, strategyTotalCashflowPnl, strategyTotalCashflowPnlPct, StrategyLegConfig } from '../api';
+import { api, LockedExitIf, Position, SavedStrategy, strategyCanCloseAll, strategyTotalCashflowPnl, strategyTotalCashflowPnlPct, StrategyLegConfig } from '../api';
 import { EditStrategyModal } from './EditStrategyModal';
 import { formatEntryDays } from './EntryDaysPicker';
 import { formatExitConditions } from './ExitConditionsEditor';
@@ -49,9 +49,10 @@ function formatLegSummary(
 interface Props {
   refreshKey?: number;
   positions: Position[];
+  onRefresh?: () => void;
 }
 
-export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
+export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Props) {
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
   const [loading, setLoading] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -103,6 +104,34 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
     }
   };
 
+  const onCloseAll = async (s: SavedStrategy) => {
+    const legCount = s.entry_legs?.length ?? 0;
+    const lots = s.entry_legs?.map((l) => l.size ?? 1).join(', ') ?? '?';
+    if (
+      !confirm(
+        `Close all open positions for "${s.name}"?\n\nThis closes only this strategy's lot size (${lots} lot(s) per leg), not the full account position.`,
+      )
+    ) {
+      return;
+    }
+    if (!legCount) {
+      setMsg('No entry legs recorded for this strategy yet');
+      return;
+    }
+    setLoading(s.id);
+    setMsg(null);
+    try {
+      await api.closeAllMyStrategyPositions(s.id);
+      setMsg(`Closed positions for ${s.name}`);
+      load();
+      onRefresh?.();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Close all failed');
+    } finally {
+      setLoading(null);
+    }
+  };
+
   if (!strategies.length) {
     return (
       <div className="panel">
@@ -135,6 +164,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
 
           {strategies.map((s) => {
             const running = s.status === 'running';
+            const canCloseAll = strategyCanCloseAll(s, positions);
             const totalPnl = running ? strategyTotalCashflowPnl(s, positions) : null;
             const totalPnlPct = running ? strategyTotalCashflowPnlPct(s, positions) : null;
             return (
@@ -195,8 +225,25 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
                     {getStrategyLegs(s).map((leg, i) => (
                       <div key={i}>{formatLegSummary(leg, i, s.locked_exit_if)}</div>
                     ))}
-                    <div style={{ marginTop: 4 }}>Entry days: {formatEntryDays(s.entry_days)}</div>
-                    <div>Entry: {s.entry_time} · Square-off: {s.end_time} IST</div>
+                    {s.entry_if_enabled && (s.entry_if_low != null || s.entry_if_high != null) ? (
+                      <div style={{ marginTop: 4 }}>
+                        Entry if:{' '}
+                        {s.entry_if_low != null && `≤ $${s.entry_if_low.toLocaleString('en-US')}`}
+                        {s.entry_if_low != null && s.entry_if_high != null && ' or '}
+                        {s.entry_if_high != null && `≥ $${s.entry_if_high.toLocaleString('en-US')}`}
+                        {' '}(BTC)
+                      </div>
+                    ) : s.entry_if_enabled ? (
+                      <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>
+                        Entry if: no levels set
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 4 }}>Entry days: {formatEntryDays(s.entry_days)}</div>
+                    )}
+                    <div>
+                      {s.entry_if_enabled ? 'Entry: price trigger' : `Entry: ${s.entry_time}`} · Square-off:{' '}
+                      {s.end_time} IST
+                    </div>
                     <div>Exit: {formatExitConditions(s.total_profit_pct, s.total_loss_pct)}</div>
                     {running && s.combined_entry_premium == null && s.last_entry_date && (
                       <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
@@ -224,7 +271,20 @@ export function MyStrategiesPanel({ refreshKey = 0, positions }: Props) {
                     </pre>
                   )}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'stretch' }}>
+                  <button
+                    className="btn btn-ghost"
+                    style={{ padding: '6px 10px', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
+                    disabled={(loading !== null && loading !== s.id) || !canCloseAll}
+                    onClick={() => onCloseAll(s)}
+                    title={
+                      canCloseAll
+                        ? 'Close this strategy\'s lot size on each leg'
+                        : 'No open positions for this strategy'
+                    }
+                  >
+                    Close all
+                  </button>
                   <button
                     className="btn btn-ghost"
                     style={{ padding: 6, opacity: running ? 0.4 : 1 }}

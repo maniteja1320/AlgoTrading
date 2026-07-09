@@ -55,7 +55,7 @@ def get_expiry_slots(delta: DeltaService = Depends(get_delta_service)):
 def custom_option_preview(
     option_type: str = Query(..., pattern="^(call|put)$"),
     strike_type: str = Query(default="ATM", pattern="^ATM$"),
-    expiry_slot: str = Query(..., pattern="^(today|tomorrow)$"),
+    expiry_slot: str = Query(..., pattern="^(today|tomorrow|slot_\\d+)$"),
     delta: DeltaService = Depends(get_delta_service),
 ):
     try:

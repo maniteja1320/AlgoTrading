@@ -1,7 +1,19 @@
-# Stop processes on port 8002, then start one backend (8000 may have stale zombie listeners).
-$port = 8002
-Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue |
-  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 2
+# Stop processes on port 8003, then start one backend.
+# (Port 8002 may retain stale Windows socket listeners after crashed uvicorn processes.)
+$port = 8003
+for ($i = 0; $i -lt 6; $i++) {
+  netstat -ano | Select-String ":$port\s" | Select-String "LISTENING" | ForEach-Object {
+    $processId = ($_.Line -split '\s+')[-1]
+    if ($processId -match '^\d+$') {
+      taskkill /F /PID $processId 2>$null | Out-Null
+    }
+  }
+  Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Seconds 1
+  $stillListening = netstat -ano | Select-String ":$port\s" | Select-String "LISTENING"
+  if (-not $stillListening) { break }
+}
+Start-Sleep -Seconds 1
 Set-Location $PSScriptRoot
-.\venv\Scripts\uvicorn app.main:app --reload --port $port
+.\venv\Scripts\python.exe -m uvicorn app.main:app --reload --port $port

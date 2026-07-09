@@ -111,6 +111,9 @@ export interface SavedStrategy {
   end_time: string;
   total_profit_pct?: number | null;
   total_loss_pct?: number | null;
+  entry_if_enabled?: boolean;
+  entry_if_low?: number | null;
+  entry_if_high?: number | null;
   legs?: StrategyLegConfig[];
   /** @deprecated legacy single-leg */
   option_type?: string;
@@ -147,13 +150,27 @@ function strategyLegConfigs(strategy: SavedStrategy): StrategyLegConfig[] {
   return [];
 }
 
-/** Lot size for P&L % — from open positions when available, else strategy leg config. */
-export function strategyEntrySize(strategy: SavedStrategy, positions: Position[]): number {
-  const openLegs = strategyLegPositions(strategy, positions);
-  if (openLegs.length) {
-    const sizes = openLegs.map((p) => Math.abs(p.size)).filter((s) => s > 0);
-    if (sizes.length) return sizes[0];
+function strategyLotSizeForProduct(strategy: SavedStrategy, productId: number): number {
+  const entryLeg = strategy.entry_legs?.find((l) => l.product_id === productId);
+  if (entryLeg?.size && entryLeg.size > 0) return entryLeg.size;
+
+  const locked = strategy.locked_exit_if?.[String(productId)];
+  if (locked?.leg_index != null) {
+    const configs = strategyLegConfigs(strategy);
+    const cfg = configs[locked.leg_index - 1];
+    if (cfg?.size && cfg.size > 0) return cfg.size;
   }
+
+  const productIds = strategyLegProductIds(strategy);
+  const idx = productIds.indexOf(productId);
+  const configs = strategyLegConfigs(strategy);
+  if (idx >= 0 && configs[idx]?.size) return configs[idx].size;
+
+  return strategy.size ?? 1;
+}
+
+/** Lot size for P&L % — this strategy's configured/entry size, not the full account position. */
+export function strategyEntrySize(strategy: SavedStrategy, _positions?: Position[]): number {
   const entryLegs = strategy.entry_legs;
   if (entryLegs?.length) {
     const sizes = entryLegs.map((l) => l.size ?? 0).filter((s) => s > 0);
@@ -164,11 +181,17 @@ export function strategyEntrySize(strategy: SavedStrategy, positions: Position[]
   return strategy.size ?? 1;
 }
 
-/** Product IDs for strategy legs (from locked exit-if at entry). */
+/** Product IDs for strategy legs (locked exit-if at entry, else persisted entry legs). */
 export function strategyLegProductIds(strategy: SavedStrategy): number[] {
   const locked = strategy.locked_exit_if;
-  if (!locked) return [];
-  return Object.keys(locked).map((id) => Number(id));
+  if (locked && Object.keys(locked).length) {
+    return Object.keys(locked).map((id) => Number(id));
+  }
+  const entryLegs = strategy.entry_legs;
+  if (entryLegs?.length) {
+    return entryLegs.map((l) => l.product_id);
+  }
+  return [];
 }
 
 /** Open positions that belong to this strategy's legs (same rows as Positions tab). */
@@ -178,11 +201,34 @@ export function strategyLegPositions(strategy: SavedStrategy, positions: Positio
   return positions.filter((p) => p.size !== 0 && productIds.includes(p.product_id));
 }
 
-/** Sum of P&L (Cashflow) for all strategy legs — same math as Positions tab. */
+/** Sum of P&L (Cashflow) for this strategy's share of each leg (prorated when legs are shared). */
 export function strategyTotalCashflowPnl(strategy: SavedStrategy, positions: Position[]): number | null {
-  const legs = strategyLegPositions(strategy, positions);
-  if (!legs.length) return null;
-  return legs.reduce((sum, p) => sum + positionTotalCashflow(p), 0);
+  const productIds = strategyLegProductIds(strategy);
+  if (!productIds.length) return null;
+
+  let total = 0;
+  let matched = false;
+
+  for (const productId of productIds) {
+    const pos = positions.find((p) => p.product_id === productId && p.size !== 0);
+    if (!pos) continue;
+
+    const accountLots = Math.abs(pos.size);
+    const strategyLots = strategyLotSizeForProduct(strategy, productId);
+    if (accountLots <= 0 || strategyLots <= 0) continue;
+
+    total += positionTotalCashflow(pos) * (strategyLots / accountLots);
+    matched = true;
+  }
+
+  return matched ? total : null;
+}
+
+/** True when this strategy has entry legs with a matching open account position. */
+export function strategyCanCloseAll(strategy: SavedStrategy, positions: Position[]): boolean {
+  const productIds = strategyLegProductIds(strategy);
+  if (!productIds.length) return false;
+  return productIds.some((id) => positions.some((p) => p.product_id === id && p.size !== 0));
 }
 
 /** Live total profit %: (live total P&L × 1000 × 100) / (combined entry premium × size). */
@@ -201,6 +247,9 @@ export interface SavedStrategyPayload {
   entry_time: string;
   end_time: string;
   legs: StrategyLegConfig[];
+  entry_if_enabled?: boolean;
+  entry_if_low?: number | null;
+  entry_if_high?: number | null;
   total_profit_pct?: number;
   total_loss_pct?: number;
 }
@@ -296,6 +345,10 @@ export const api = {
     request(`/api/my-strategies/${id}/deactivate`, { method: 'POST' }),
   deactivateMyStrategies: () =>
     request('/api/my-strategies/deactivate', { method: 'POST' }),
+  closeAllMyStrategyPositions: (id: string) =>
+    request<{ status: string; id: string; orders: unknown[] }>(`/api/my-strategies/${id}/close-all`, {
+      method: 'POST',
+    }),
   deleteMyStrategy: (id: string) =>
     request(`/api/my-strategies/${id}`, { method: 'DELETE' }),
 };

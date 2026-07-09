@@ -12,24 +12,87 @@ def _leg_mark_price(pos: dict[str, Any]) -> float | None:
 
 
 def get_open_positions_for_legs(
-    delta: DeltaService, resolved_legs: list[dict[str, Any]]
+    delta: DeltaService,
+    resolved_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return legs that have a non-zero open position (with mark from ticker when needed)."""
+    """Return legs that have a non-zero open position."""
     open_legs: list[dict[str, Any]] = []
     for leg in resolved_legs:
         product_id = int(leg["product_id"])
         symbol = leg.get("symbol")
-        try:
-            positions = delta.get_positions(product_id=product_id, symbol=symbol)
-        except Exception:
-            continue
-        open_pos = next(
-            (p for p in positions if isinstance(p, dict) and p.get("size", 0) != 0),
-            None,
-        )
+        open_pos: dict[str, Any] | None = None
+        if positions_map is not None:
+            open_pos = positions_map.get(product_id)
+            if open_pos and open_pos.get("size", 0) == 0:
+                open_pos = None
+        else:
+            try:
+                positions = delta.get_positions(product_id=product_id, symbol=symbol)
+            except Exception:
+                continue
+            open_pos = next(
+                (p for p in positions if isinstance(p, dict) and p.get("size", 0) != 0),
+                None,
+            )
         if open_pos:
             open_legs.append({**leg, "position": open_pos})
     return open_legs
+
+
+def _position_total_cashflow(pos: dict[str, Any]) -> float:
+    total = pos.get("total_cashflow")
+    if total is not None and str(total).strip() != "":
+        try:
+            return float(total)
+        except (TypeError, ValueError):
+            pass
+    realized = float(pos.get("realized_cashflow") or 0)
+    unrealized = float(pos.get("unrealized_cashflow") or 0)
+    return realized + unrealized
+
+
+def compute_strategy_cashflow_pnl_pct(
+    saved: dict[str, Any],
+    monitoring_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+) -> float | None:
+    """
+    Same formula as frontend Live P&L %:
+    (strategy cashflow P&L × 1000 × 100) / (combined entry premium × size).
+    """
+    combined_premium = saved.get("combined_entry_premium")
+    if combined_premium is None or float(combined_premium) <= 0:
+        return None
+
+    if not monitoring_legs:
+        return None
+
+    size = int(monitoring_legs[0].get("size") or saved.get("size") or 1)
+    if size <= 0:
+        return None
+
+    total_pnl = 0.0
+    matched = 0
+    for leg in monitoring_legs:
+        pid = int(leg["product_id"])
+        pos = positions_map.get(pid)
+        if not pos or pos.get("size", 0) == 0:
+            continue
+
+        account_lots = abs(int(pos["size"]))
+        strategy_lots = int(leg.get("size") or size)
+        if account_lots <= 0 or strategy_lots <= 0:
+            continue
+
+        share = strategy_lots / account_lots
+        total_pnl += _position_total_cashflow(pos) * share
+        matched += 1
+
+    if matched < len(monitoring_legs):
+        return None
+
+    return (total_pnl * 1000 * 100) / (float(combined_premium) * size)
 
 
 def compute_combined_pnl_pct(open_legs: list[dict[str, Any]]) -> float | None:

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { createLeg, CustomLegsEditor, legsToPayload } from './CustomLegsEditor';
 import type { CustomLeg } from './CustomLegsEditor';
 import { DEFAULT_ENTRY_DAYS, EntryDaysPicker } from './EntryDaysPicker';
+import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
 import { formatAmPmTime, HOURS_12, MINUTES } from '../timeUtils';
 
@@ -97,7 +98,10 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   ]);
   const [totalProfitPct, setTotalProfitPct] = useState('');
   const [totalLossPct, setTotalLossPct] = useState('');
-  const [expirySlots, setExpirySlots] = useState<{ today?: string; tomorrow?: string }>({});
+  const [entryIfEnabled, setEntryIfEnabled] = useState(false);
+  const [entryIfLow, setEntryIfLow] = useState('');
+  const [entryIfHigh, setEntryIfHigh] = useState('');
+  const [expirySlots, setExpirySlots] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -124,9 +128,9 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   const loadExpirySlots = useCallback(async () => {
     try {
       const data = await api.getExpirySlots();
-      setExpirySlots(data.slots);
+      setExpirySlots(data.active);
     } catch {
-      setExpirySlots({});
+      setExpirySlots([]);
     }
   }, []);
 
@@ -145,7 +149,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
       setMsg('Enter a strategy name');
       return;
     }
-    if (!entryDays.length) {
+    if (!entryIfEnabled && !entryDays.length) {
       setMsg('Select at least one entry day');
       return;
     }
@@ -154,9 +158,11 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
     try {
       const total_profit_pct = parseOptionalPct(totalProfitPct, 'Total profit');
       const total_loss_pct = parseOptionalPct(totalLossPct, 'Total loss');
+      const entryIf = parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh);
       await api.saveMyStrategy({
         name: strategyName.trim(),
-        entry_days: entryDays,
+        ...entryIf,
+        entry_days: entryIfEnabled ? [] : entryDays,
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),
@@ -270,16 +276,26 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                   placeholder="e.g. ATM Straddle"
                 />
               </div>
-              <EntryDaysPicker value={entryDays} onChange={setEntryDays} />
-              <TimePicker
-                label="Entry Time (IST)"
-                hour={entryHour}
-                minute={entryMinute}
-                ampm={entryAmPm}
-                onHour={setEntryHour}
-                onMinute={setEntryMinute}
-                onAmPm={setEntryAmPm}
+              <EntryIfEditor
+                enabled={entryIfEnabled}
+                low={entryIfLow}
+                high={entryIfHigh}
+                onEnabledChange={setEntryIfEnabled}
+                onLowChange={setEntryIfLow}
+                onHighChange={setEntryIfHigh}
               />
+              {!entryIfEnabled && <EntryDaysPicker value={entryDays} onChange={setEntryDays} />}
+              {!entryIfEnabled && (
+                <TimePicker
+                  label="Entry Time (IST)"
+                  hour={entryHour}
+                  minute={entryMinute}
+                  ampm={entryAmPm}
+                  onHour={setEntryHour}
+                  onMinute={setEntryMinute}
+                  onAmPm={setEntryAmPm}
+                />
+              )}
               <TimePicker
                 label="End Time (IST)"
                 hour={endHour}
@@ -289,7 +305,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                 onMinute={setEndMinute}
                 onAmPm={setEndAmPm}
               />
-              <CustomLegsEditor legs={customLegs} expirySlots={expirySlots} onChange={setCustomLegs} />
+              <CustomLegsEditor legs={customLegs} activeExpiries={expirySlots} onChange={setCustomLegs} />
               <ExitConditionsEditor
                 totalProfit={totalProfitPct}
                 totalLoss={totalLossPct}

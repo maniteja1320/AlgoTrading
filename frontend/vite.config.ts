@@ -59,8 +59,8 @@ export default defineConfig({
       Expires: '0',
     },
     proxy: {
-      '/api': 'http://localhost:8002',
-      '/health': 'http://localhost:8002',
+      '/api': 'http://localhost:8003',
+      '/health': 'http://localhost:8003',
     },
   },
 })

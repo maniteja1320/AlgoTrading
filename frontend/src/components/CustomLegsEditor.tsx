@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, StrategyLegConfig } from '../api';
+import { expirySlotLabel, expirySlotOptions, type ExpirySlotOption } from '../expiryUtils';
 
 const EXIT_IF_BUFFER = 200;
 
@@ -8,7 +9,7 @@ export interface CustomLeg {
   uid: string;
   option_type: 'call' | 'put';
   strike_type: 'ATM';
-  expiry_slot: 'today' | 'tomorrow';
+  expiry_slot: string;
   side: 'buy' | 'sell';
   order_type: 'limit_order' | 'market_order';
   limit_price: string;
@@ -52,15 +53,16 @@ export function defaultExitIf(atmStrike: number, combinedPremium: number): { low
   };
 }
 
-function legSummary(leg: CustomLeg): string {
+function legSummary(leg: CustomLeg, activeExpiries: string[]): string {
   const order = leg.order_type === 'limit_order' ? 'Limit' : 'Market';
   const exit = leg.exit_if_enabled ? ' · Exit if on' : '';
-  return `${leg.option_type.toUpperCase()} · ATM · ${leg.expiry_slot} · ${leg.side} · ${order} · ${leg.size}${exit}`;
+  const expiry = expirySlotLabel(leg.expiry_slot, activeExpiries);
+  return `${leg.option_type.toUpperCase()} · ATM · ${expiry} · ${leg.side} · ${order} · ${leg.size}${exit}`;
 }
 
 interface Props {
   legs: CustomLeg[];
-  expirySlots: { today?: string; tomorrow?: string };
+  activeExpiries: string[];
   onChange: (legs: CustomLeg[]) => void;
 }
 
@@ -83,9 +85,14 @@ function LegPreview({ preview }: { preview: LegPreviewData | null }) {
   );
 }
 
-export function CustomLegsEditor({ legs, expirySlots, onChange }: Props) {
+export function CustomLegsEditor({ legs, activeExpiries, onChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [previews, setPreviews] = useState<Record<string, LegPreviewData>>({});
+
+  const expiryOptions: ExpirySlotOption[] = useMemo(
+    () => expirySlotOptions(activeExpiries),
+    [activeExpiries],
+  );
 
   const fetchPreviews = useCallback(async (currentLegs: CustomLeg[]) => {
     const entries = await Promise.all(
@@ -212,7 +219,7 @@ export function CustomLegsEditor({ legs, expirySlots, onChange }: Props) {
                 <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>Leg {index + 1}</div>
                 {!isOpen && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                    {legSummary(leg)}
+                    {legSummary(leg, activeExpiries)}
                   </div>
                 )}
               </div>
@@ -256,12 +263,13 @@ export function CustomLegsEditor({ legs, expirySlots, onChange }: Props) {
                   <select
                     className="input"
                     value={leg.expiry_slot}
-                    onChange={(e) => updateLeg(leg.uid, { expiry_slot: e.target.value as 'today' | 'tomorrow' })}
+                    onChange={(e) => updateLeg(leg.uid, { expiry_slot: e.target.value })}
                   >
-                    <option value="today">Today{expirySlots.today ? ` (${expirySlots.today})` : ''}</option>
-                    <option value="tomorrow" disabled={!expirySlots.tomorrow}>
-                      Tomorrow{expirySlots.tomorrow ? ` (${expirySlots.tomorrow})` : ''}
-                    </option>
+                    {expiryOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>

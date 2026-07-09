@@ -26,11 +26,22 @@ def resolve_expiry_slot(slot: str, expiries: list[str]) -> str:
     """
     today = nearest active expiry
     tomorrow = second nearest active expiry
+    slot_N = Nth active expiry (slot_2, slot_3, ...)
     """
     active = active_expiries(expiries)
     if not active:
         raise ValueError("No active option expiries available")
-    index = 0 if slot == "today" else 1
+    if slot == "today":
+        index = 0
+    elif slot == "tomorrow":
+        index = 1
+    elif slot.startswith("slot_"):
+        try:
+            index = int(slot.split("_", 1)[1])
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Invalid expiry slot '{slot}'") from e
+    else:
+        raise ValueError(f"Invalid expiry slot '{slot}'")
     if index >= len(active):
         raise ValueError(f"Not enough expiries for '{slot}' (only {len(active)} active)")
     return active[index]

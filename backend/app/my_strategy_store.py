@@ -246,6 +246,18 @@ def clear_locked_exit_if(strategy_id: str, product_id: str | None = None) -> Non
     _write(data)
 
 
+def clear_strategy_position_state(strategy_id: str) -> None:
+    """Clear per-strategy position tracking after manual or full square-off."""
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            s.pop("entry_legs", None)
+            s.pop("combined_entry_premium", None)
+            s["locked_exit_if"] = {}
+            break
+    _write(data)
+
+
 def mark_leg_squared_off(strategy_id: str, product_id: str) -> None:
     data = _read()
     for s in data.get("strategies", []):

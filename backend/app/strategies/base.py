@@ -5,6 +5,7 @@ from typing import Any
 
 from app.delta_service import DeltaService
 from app.option_resolver import resolve_custom_option
+from app.order_parallel import place_order_safe, run_parallel
 
 
 @dataclass
@@ -241,34 +242,45 @@ class CustomStrategy(BaseStrategy):
             raise ValueError(f"Could not resolve symbol: {symbol}")
         return int(pid), symbol
 
+    def _place_configured_leg(self, leg: dict[str, Any], index: int) -> dict[str, Any]:
+        product_id, symbol = self._resolve_leg(leg)
+        side = leg.get("side", "buy")
+        size = int(leg.get("size", 1))
+        order_type = leg.get("order_type", "limit_order")
+        limit_price = leg.get("limit_price")
+
+        if order_type == "limit_order" and not limit_price:
+            limit_price = leg.get("mark_price")
+        if order_type == "limit_order" and not limit_price:
+            ticker = self.delta.get_ticker(symbol)
+            limit_price = ticker.get("mark_price")
+        if order_type == "limit_order" and not limit_price:
+            raise ValueError(f"Leg {index + 1}: limit_price required for limit orders")
+
+        self.state.log(f"Placing {side} {size}x {symbol} ({order_type})")
+
+        order = place_order_safe(
+            self.delta,
+            product_id=product_id,
+            size=size,
+            side=side,
+            limit_price=str(limit_price) if order_type == "limit_order" else None,
+            order_type=order_type,
+        )
+        self.state.log(f"Order placed for {symbol}")
+        return {"symbol": symbol, "side": side, "order": order}
+
     def run_once(self, expiry_date: str) -> dict[str, Any]:
         legs = self._build_legs_from_params()
 
-        orders = []
-        for i, leg in enumerate(legs):
-            product_id, symbol = self._resolve_leg(leg)
-            side = leg.get("side", "buy")
-            size = int(leg.get("size", 1))
-            order_type = leg.get("order_type", "limit_order")
-            limit_price = leg.get("limit_price")
-
-            if order_type == "limit_order" and not limit_price:
-                ticker = self.delta.get_ticker(symbol)
-                limit_price = ticker.get("mark_price")
-            if order_type == "limit_order" and not limit_price:
-                raise ValueError(f"Leg {i + 1}: limit_price required for limit orders")
-
-            self.state.log(f"Placing {side} {size}x {symbol} ({order_type})")
-
-            order = self.delta.place_order(
-                product_id=product_id,
-                size=size,
-                side=side,
-                limit_price=str(limit_price) if order_type == "limit_order" else None,
-                order_type=order_type,
+        if len(legs) <= 1:
+            orders = []
+            for i, leg in enumerate(legs):
+                orders.append(self._place_configured_leg(leg, i))
+        else:
+            orders = run_parallel(
+                [lambda leg=leg, idx=i: self._place_configured_leg(leg, idx) for i, leg in enumerate(legs)]
             )
-            orders.append({"symbol": symbol, "side": side, "order": order})
-            self.state.log(f"Order placed for {symbol}")
 
         self.state.last_run = datetime.utcnow()
         self.state.metadata = {

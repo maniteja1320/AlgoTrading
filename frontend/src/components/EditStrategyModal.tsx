@@ -4,6 +4,7 @@ import { api, SavedStrategy, StrategyLegConfig } from '../api';
 import { createLeg, CustomLegsEditor, legsToPayload } from './CustomLegsEditor';
 import type { CustomLeg } from './CustomLegsEditor';
 import { EntryDaysPicker } from './EntryDaysPicker';
+import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
 import { formatAmPmTime, HOURS_12, MINUTES, parseAmPmTime } from '../timeUtils';
 
@@ -51,7 +52,7 @@ function legsFromSaved(legs: StrategyLegConfig[]): CustomLeg[] {
   return legs.map((leg) =>
     createLeg({
       option_type: leg.option_type as 'call' | 'put',
-      expiry_slot: leg.expiry_slot as 'today' | 'tomorrow',
+      expiry_slot: leg.expiry_slot,
       side: leg.side as 'buy' | 'sell',
       order_type: leg.order_type as 'limit_order' | 'market_order',
       limit_price: leg.limit_price ?? '',
@@ -87,16 +88,23 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
   const [totalLossPct, setTotalLossPct] = useState(
     strategy.total_loss_pct != null ? String(strategy.total_loss_pct) : '',
   );
-  const [expirySlots, setExpirySlots] = useState<{ today?: string; tomorrow?: string }>({});
+  const [entryIfEnabled, setEntryIfEnabled] = useState(strategy.entry_if_enabled ?? false);
+  const [entryIfLow, setEntryIfLow] = useState(
+    strategy.entry_if_low != null ? String(strategy.entry_if_low) : '',
+  );
+  const [entryIfHigh, setEntryIfHigh] = useState(
+    strategy.entry_if_high != null ? String(strategy.entry_if_high) : '',
+  );
+  const [activeExpiries, setActiveExpiries] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const loadExpirySlots = useCallback(async () => {
     try {
       const data = await api.getExpirySlots();
-      setExpirySlots(data.slots);
+      setActiveExpiries(data.active);
     } catch {
-      setExpirySlots({});
+      setActiveExpiries([]);
     }
   }, []);
 
@@ -109,7 +117,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
       setMsg('Enter a strategy name');
       return;
     }
-    if (!entryDays.length) {
+    if (!entryIfEnabled && !entryDays.length) {
       setMsg('Select at least one entry day');
       return;
     }
@@ -118,9 +126,11 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
     try {
       const total_profit_pct = parseOptionalPct(totalProfitPct, 'Total profit');
       const total_loss_pct = parseOptionalPct(totalLossPct, 'Total loss');
+      const entryIf = parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh);
       await api.updateMyStrategy(strategy.id, {
         name: name.trim(),
-        entry_days: entryDays,
+        ...entryIf,
+        entry_days: entryIfEnabled ? [] : entryDays,
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),
@@ -150,16 +160,26 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
             <label className="label">Strategy Name</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <EntryDaysPicker value={entryDays} onChange={setEntryDays} />
-          <TimePicker
-            label="Entry Time (IST)"
-            hour={entryHour}
-            minute={entryMinute}
-            ampm={entryAmPm}
-            onHour={setEntryHour}
-            onMinute={setEntryMinute}
-            onAmPm={setEntryAmPm}
+          <EntryIfEditor
+            enabled={entryIfEnabled}
+            low={entryIfLow}
+            high={entryIfHigh}
+            onEnabledChange={setEntryIfEnabled}
+            onLowChange={setEntryIfLow}
+            onHighChange={setEntryIfHigh}
           />
+          {!entryIfEnabled && <EntryDaysPicker value={entryDays} onChange={setEntryDays} />}
+          {!entryIfEnabled && (
+            <TimePicker
+              label="Entry Time (IST)"
+              hour={entryHour}
+              minute={entryMinute}
+              ampm={entryAmPm}
+              onHour={setEntryHour}
+              onMinute={setEntryMinute}
+              onAmPm={setEntryAmPm}
+            />
+          )}
           <TimePicker
             label="End Time (IST)"
             hour={endHour}
@@ -169,7 +189,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
             onMinute={setEndMinute}
             onAmPm={setEndAmPm}
           />
-          <CustomLegsEditor legs={customLegs} expirySlots={expirySlots} onChange={setCustomLegs} />
+          <CustomLegsEditor legs={customLegs} activeExpiries={activeExpiries} onChange={setCustomLegs} />
           <ExitConditionsEditor
             totalProfit={totalProfitPct}
             totalLoss={totalLossPct}
