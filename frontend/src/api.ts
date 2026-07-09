@@ -130,6 +130,10 @@ export interface SavedStrategy {
   locked_exit_if?: Record<string, LockedExitIf>;
   combined_entry_premium?: number;
   entry_legs?: Array<{ product_id: number; size?: number }>;
+  run_once_any_completed?: boolean;
+  run_once_completed_weekdays?: string[];
+  run_once_scheduled_date?: string | null;
+  run_once_activated_at?: string | null;
 }
 
 function strategyLegConfigs(strategy: SavedStrategy): StrategyLegConfig[] {

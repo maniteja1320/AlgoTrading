@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { api, SavedStrategy, StrategyLegConfig } from '../api';
 import { createLeg, CustomLegsEditor, legsToPayload } from './CustomLegsEditor';
 import type { CustomLeg } from './CustomLegsEditor';
-import { EntryDaysPicker } from './EntryDaysPicker';
+import { EntryDaysPicker, entryDaysForSave, hasValidEntryDays, normalizeEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
 import { formatAmPmTime, HOURS_12, MINUTES, parseAmPmTime } from '../timeUtils';
@@ -74,7 +74,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
   const endParsed = parseAmPmTime(strategy.end_time);
 
   const [name, setName] = useState(strategy.name);
-  const [entryDays, setEntryDays] = useState<string[]>(strategy.entry_days ?? []);
+  const [entryDays, setEntryDays] = useState<string[]>(() => normalizeEntryDays(strategy.entry_days ?? []));
   const [entryHour, setEntryHour] = useState(entryParsed.hour);
   const [entryMinute, setEntryMinute] = useState(entryParsed.minute);
   const [entryAmPm, setEntryAmPm] = useState<'AM' | 'PM'>(entryParsed.ampm);
@@ -117,8 +117,8 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
       setMsg('Enter a strategy name');
       return;
     }
-    if (!entryIfEnabled && !entryDays.length) {
-      setMsg('Select at least one entry day');
+    if (!entryIfEnabled && !hasValidEntryDays(entryDays)) {
+      setMsg('Select Run Once and/or at least one entry day');
       return;
     }
     setLoading(true);
@@ -130,7 +130,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
       await api.updateMyStrategy(strategy.id, {
         name: name.trim(),
         ...entryIf,
-        entry_days: entryIfEnabled ? [] : entryDays,
+        entry_days: entryIfEnabled ? [] : entryDaysForSave(entryDays),
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),

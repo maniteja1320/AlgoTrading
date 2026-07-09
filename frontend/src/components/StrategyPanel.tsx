@@ -3,7 +3,7 @@ import { Play, Save, Square, Zap } from 'lucide-react';
 import { api } from '../api';
 import { createLeg, CustomLegsEditor, legsToPayload } from './CustomLegsEditor';
 import type { CustomLeg } from './CustomLegsEditor';
-import { DEFAULT_ENTRY_DAYS, EntryDaysPicker } from './EntryDaysPicker';
+import { DEFAULT_ENTRY_DAYS, EntryDaysPicker, entryDaysForSave, hasValidEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
 import { formatAmPmTime, HOURS_12, MINUTES } from '../timeUtils';
@@ -149,8 +149,8 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
       setMsg('Enter a strategy name');
       return;
     }
-    if (!entryIfEnabled && !entryDays.length) {
-      setMsg('Select at least one entry day');
+    if (!entryIfEnabled && !hasValidEntryDays(entryDays)) {
+      setMsg('Select Run Once and/or at least one entry day');
       return;
     }
     setLoading(true);
@@ -162,7 +162,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
       await api.saveMyStrategy({
         name: strategyName.trim(),
         ...entryIf,
-        entry_days: entryIfEnabled ? [] : entryDays,
+        entry_days: entryIfEnabled ? [] : entryDaysForSave(entryDays),
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),

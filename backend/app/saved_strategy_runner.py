@@ -7,7 +7,15 @@ from fastapi import FastAPI
 from app.delta_service import get_delta_service
 from app.my_strategy_store import append_log, get_running_strategies
 from app.saved_strategy_executor import execute_saved_strategy_tick
-from app.time_utils import is_at_or_after, is_entry_day, is_expiry_calendar_day, now_ist, today_ist_str
+from app.time_utils import (
+    is_at_or_after,
+    is_expiry_calendar_day,
+    is_run_once_entry_complete,
+    is_run_once_weekday_pending_today,
+    now_ist,
+    scheduled_entry_ready,
+    today_ist_str,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -31,8 +39,15 @@ def _poll_interval_seconds() -> float:
             return 5.0
 
         entry_days = saved.get("entry_days") or []
-        if entry_days and is_entry_day(entry_days, now) and is_at_or_after(saved.get("entry_time", "09:30 AM"), now):
-            return 5.0
+        entry_time = saved.get("entry_time", "09:30 AM")
+        if entry_days and saved.get("last_entry_date") != today and not is_run_once_entry_complete(saved, entry_days):
+            ready, _ = scheduled_entry_ready(saved, entry_days, entry_time, now)
+            if ready:
+                return 5.0
+            if saved.get("run_once_scheduled_date") == today:
+                return 5.0
+            if is_run_once_weekday_pending_today(saved, entry_days, now):
+                return 5.0
 
         for leg in saved.get("entry_legs") or []:
             expiry = leg.get("expiry_date") or ""

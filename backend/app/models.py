@@ -69,6 +69,8 @@ class SavedStrategyCreate(BaseModel):
                 and self.entry_if_low >= self.entry_if_high
             ):
                 raise ValueError("Entry if lower must be less than upper when both are set")
-        elif not self.entry_days:
-            raise ValueError("Select at least one entry day")
+        else:
+            from app.time_utils import validate_entry_days
+
+            self.entry_days = validate_entry_days(self.entry_days)
         return self

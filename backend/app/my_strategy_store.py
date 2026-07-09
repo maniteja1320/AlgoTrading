@@ -104,6 +104,10 @@ def update_strategy(strategy_id: str, payload: dict[str, Any]) -> dict[str, Any]
                 "locked_exit_if",
                 "combined_entry_premium",
                 "entry_legs",
+                "run_once_any_completed",
+                "run_once_completed_weekdays",
+                "run_once_scheduled_date",
+                "run_once_activated_at",
             ):
                 updated.pop(key, None)
             data["strategies"][i] = updated
@@ -134,6 +138,23 @@ def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
             s["locked_exit_if"] = {}
             s.pop("combined_entry_premium", None)
             s.pop("entry_legs", None)
+            s.pop("run_once_any_completed", None)
+            s.pop("run_once_completed_weekdays", None)
+            s.pop("run_once_scheduled_date", None)
+            entry_days = s.get("entry_days") or []
+            from app.time_utils import is_run_once, now_ist, parse_ampm_time, weekday_entry_days
+
+            if is_run_once(entry_days):
+                now = now_ist()
+                s["run_once_activated_at"] = now.isoformat()
+                if not weekday_entry_days(entry_days):
+                    entry_t = parse_ampm_time(s.get("entry_time", "09:30 AM"))
+                    if now.time() >= entry_t:
+                        from datetime import timedelta
+
+                        s["run_once_scheduled_date"] = (now.date() + timedelta(days=1)).isoformat()
+            else:
+                s.pop("run_once_activated_at", None)
             break
     _write(data)
     return match
@@ -199,6 +220,51 @@ def try_claim_entry(strategy_id: str, date_str: str) -> bool:
                 _write(data)
                 return True
         return False
+
+
+def release_entry_claim(strategy_id: str) -> None:
+    """Clear today's entry claim so a failed entry can retry."""
+    with _store_lock():
+        data = _read()
+        for s in data.get("strategies", []):
+            if s.get("id") == strategy_id:
+                s["last_entry_date"] = None
+                break
+        _write(data)
+
+
+def set_run_once_scheduled_date(strategy_id: str, date_str: str) -> bool:
+    """Persist scheduled date; returns True only when the value changed."""
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            if s.get("run_once_scheduled_date") == date_str:
+                return False
+            s["run_once_scheduled_date"] = date_str
+            _write(data)
+            return True
+    return False
+
+
+def mark_run_once_entry_done(strategy_id: str, entry_days: list[str], weekday: str | None = None) -> None:
+    from app.time_utils import is_run_once, weekday_entry_days
+
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") != strategy_id:
+            continue
+        if not is_run_once(entry_days):
+            break
+        if weekday_entry_days(entry_days):
+            if weekday:
+                done = s.setdefault("run_once_completed_weekdays", [])
+                if weekday not in done:
+                    done.append(weekday)
+        else:
+            s["run_once_any_completed"] = True
+            s.pop("run_once_scheduled_date", None)
+        break
+    _write(data)
 
 
 def set_entry_legs(strategy_id: str, legs: list[dict[str, Any]]) -> None:

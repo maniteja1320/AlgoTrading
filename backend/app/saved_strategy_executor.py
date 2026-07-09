@@ -8,9 +8,12 @@ from app.my_strategy_store import (
     clear_strategy_position_state,
     get_strategy_by_id,
     mark_leg_squared_off,
+    mark_run_once_entry_done,
+    release_entry_claim,
     set_combined_entry_premium,
     set_entry_legs,
     set_locked_exit_if,
+    set_run_once_scheduled_date,
     try_claim_entry,
 )
 from app.option_resolver import resolve_custom_options_batch
@@ -19,9 +22,13 @@ from app.pnl_utils import compute_strategy_cashflow_pnl_pct, should_exit_on_pnl
 from app.strategies.base import CustomStrategy
 from app.time_utils import (
     is_at_or_after,
-    is_entry_day,
     is_expiry_calendar_day,
+    is_run_once,
+    is_run_once_entry_complete,
+    now_ist,
+    scheduled_entry_ready,
     today_ist_str,
+    weekday_entry_days,
 )
 
 
@@ -675,9 +682,13 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
         if not _btc_at_entry_if_trigger(saved, btc_price):
             return
     else:
-        if not is_entry_day(entry_days):
+        if is_run_once_entry_complete(saved, entry_days):
             return
-        if not is_at_or_after(entry_time):
+        ready, schedule_date = scheduled_entry_ready(saved, entry_days, entry_time)
+        if schedule_date and schedule_date != saved.get("run_once_scheduled_date"):
+            if set_run_once_scheduled_date(sid, schedule_date):
+                saved = get_strategy_by_id(sid) or saved
+        if not ready:
             return
 
     if _this_strategy_already_entered_today(saved, positions_map):
@@ -691,22 +702,38 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
 
     params = _strategy_params_from_resolved(leg_configs, resolved_legs)
     if not params.get("legs"):
+        release_entry_claim(sid)
         return
 
     expiry_date = resolved_legs[0]["expiry_date"] if resolved_legs else ""
     strat = CustomStrategy(delta, params)
     strat.start(expiry_date)
-    result = strat.run_once(expiry_date)
+    try:
+        result = strat.run_once(expiry_date)
+    except Exception as e:
+        release_entry_claim(sid)
+        append_log(sid, f"Entry failed: {e}")
+        return
+
+    orders = result.get("orders") or []
+    if not orders:
+        release_entry_claim(sid)
+        append_log(sid, "Entry failed: no orders placed")
+        return
+
     delta.invalidate_market_cache()
     if entry_if and btc_price is not None:
         low_f, high_f = _entry_if_levels(saved)
         append_log(
             sid,
             f"Entry if: {_format_entry_if_trigger(btc_price, low_f, high_f)} "
-            f"— placed {len(result.get('orders', []))} order(s)",
+            f"— placed {len(orders)} order(s)",
         )
     else:
-        append_log(sid, f"Entry placed on {today} at {entry_time}: {len(result.get('orders', []))} order(s)")
+        append_log(sid, f"Entry placed on {today} at {entry_time}: {len(orders)} order(s)")
+    if not entry_if and is_run_once(entry_days):
+        weekday = now_ist().strftime("%A").lower() if weekday_entry_days(entry_days) else None
+        mark_run_once_entry_done(sid, entry_days, weekday)
     for line in strat.state.logs[-8:]:
         append_log(sid, line)
 
