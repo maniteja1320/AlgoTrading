@@ -57,6 +57,8 @@ def get_notifications_status():
         "push_enabled": push_on,
         "subscribed_count": len(subs),
         "smtp_host_set": bool(settings.smtp_host.strip()),
+        "smtp_port": settings.smtp_port,
+        "smtp_use_ssl": settings.smtp_use_ssl or settings.smtp_port == 465,
         "smtp_user_set": bool(settings.smtp_user.strip()),
         "smtp_password_set": bool(settings.smtp_password.strip()),
         "alert_email_to_set": bool(settings.alert_email_to.strip()),
