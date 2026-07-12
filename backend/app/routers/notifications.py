@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from app.config import settings
-from app.email_alerts import email_alerts_enabled, send_test_email
+from app.email_alerts import email_alerts_enabled, email_delivery_method, send_test_email
 from app.push_alerts import push_alerts_enabled
 from app.push_subscription_store import add_subscription, list_subscriptions, remove_subscription
 
@@ -39,9 +39,8 @@ def get_notifications_status():
         missing = [
             name
             for name, ok in (
-                ("SMTP_HOST", bool(settings.smtp_host.strip())),
-                ("SMTP_USER", bool(settings.smtp_user.strip())),
-                ("SMTP_PASSWORD", bool(settings.smtp_password.strip())),
+                ("RESEND_API_KEY", bool(settings.resend_api_key.strip())),
+                ("ALERT_EMAIL_FROM", bool(settings.alert_email_from.strip())),
                 ("ALERT_EMAIL_TO", bool(settings.alert_email_to.strip())),
             )
             if not ok
@@ -54,13 +53,11 @@ def get_notifications_status():
         hints.append("Push enabled but no subscriptions — open Settings on the deployed site and enable push")
     return {
         "email_enabled": email_on,
+        "email_delivery_method": email_delivery_method(),
         "push_enabled": push_on,
         "subscribed_count": len(subs),
-        "smtp_host_set": bool(settings.smtp_host.strip()),
-        "smtp_port": settings.smtp_port,
-        "smtp_use_ssl": settings.smtp_use_ssl or settings.smtp_port == 465,
-        "smtp_user_set": bool(settings.smtp_user.strip()),
-        "smtp_password_set": bool(settings.smtp_password.strip()),
+        "resend_api_key_set": bool(settings.resend_api_key.strip()),
+        "alert_email_from_set": bool(settings.alert_email_from.strip()),
         "alert_email_to_set": bool(settings.alert_email_to.strip()),
         "vapid_public_key_set": bool(settings.vapid_public_key.strip()),
         "vapid_private_key_set": bool(settings.vapid_private_key.strip()),
@@ -71,18 +68,22 @@ def get_notifications_status():
 
 def _run_test_email():
     if not email_alerts_enabled():
-        raise HTTPException(status_code=503, detail="SMTP is not fully configured on backend")
+        raise HTTPException(status_code=503, detail="Resend email is not configured on backend")
     try:
         send_test_email()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"SMTP send failed: {exc}") from exc
-    return {"status": "sent", "to": settings.alert_email_to.strip()}
+        raise HTTPException(status_code=502, detail=f"Email send failed (resend): {exc}") from exc
+    return {
+        "status": "sent",
+        "to": settings.alert_email_to.strip(),
+        "method": "resend",
+    }
 
 
 @router.get("/test-email")
 @router.post("/test-email")
 def send_notifications_test_email():
-    """Send one test email using backend SMTP settings (GET for browser, POST for scripts)."""
+    """Send one test email via Resend (GET for browser, POST for scripts)."""
     return _run_test_email()
 
 

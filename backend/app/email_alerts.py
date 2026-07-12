@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from email.mime.text import MIMEText
 from typing import Any, Literal
 
 from app.config import settings
 from app.pnl_utils import format_pnl_alert_label
-from app.smtp_ipv4 import send_via_smtp
+from app.resend_email import send_via_resend
 
 logger = logging.getLogger(__name__)
 
@@ -17,53 +16,37 @@ AlertEvent = Literal["opened", "closed"]
 
 def email_alerts_enabled() -> bool:
     return bool(
-        settings.smtp_host.strip()
-        and settings.smtp_user.strip()
-        and settings.smtp_password.strip()
+        settings.resend_api_key.strip()
         and settings.alert_email_to.strip()
+        and settings.resend_from_address
     )
+
+
+def email_delivery_method() -> str:
+    return "resend" if email_alerts_enabled() else "none"
 
 
 def _send_email_sync(subject: str, body: str) -> None:
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = settings.smtp_user.strip()
-    msg["To"] = settings.alert_email_to.strip()
-
-    host = settings.smtp_host.strip()
-    port = settings.smtp_port
-    user = settings.smtp_user.strip()
-    password = settings.smtp_password_normalized
-    use_ssl = settings.smtp_use_ssl or port == 465
-
-    logger.info("Sending email via %s:%s ssl=%s ipv4=true to %s", host, port, use_ssl, settings.alert_email_to.strip())
-
-    send_via_smtp(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        mail_from=user,
+    if not email_alerts_enabled():
+        raise RuntimeError("Resend is not configured (RESEND_API_KEY, ALERT_EMAIL_FROM, ALERT_EMAIL_TO)")
+    send_via_resend(
+        api_key=settings.resend_api_key.strip(),
+        mail_from=settings.resend_from_address,
         mail_to=settings.alert_email_to.strip(),
-        message=msg.as_string(),
-        use_ssl=use_ssl,
+        subject=subject,
+        body=body,
     )
-
-    logger.info("Email sent: %s", subject)
 
 
 def send_test_email() -> None:
-    """Send a test alert email; raises on SMTP failure."""
-    if not email_alerts_enabled():
-        raise RuntimeError("SMTP is not fully configured")
+    """Send a test alert email; raises on delivery failure."""
     _send_email_sync(
         "[BTC Algo] Test email",
-        "This is a test alert from your BTC Algo backend.\n\nIf you received this, SMTP is working.\n",
+        "This is a test alert from your BTC Algo backend.\n\nIf you received this, Resend email alerts are working.\n",
     )
 
 
 def _start_email_thread(target) -> None:
-    # Non-daemon so Railway/uvicorn does not drop SMTP mid-send.
     threading.Thread(target=target, daemon=False).start()
 
 
@@ -82,13 +65,7 @@ def notify_order_email(
 ) -> None:
     try:
         if not email_alerts_enabled():
-            logger.warning(
-                "Order email skipped — SMTP not fully configured (host=%s user=%s password=%s to=%s)",
-                bool(settings.smtp_host.strip()),
-                bool(settings.smtp_user.strip()),
-                bool(settings.smtp_password.strip()),
-                bool(settings.alert_email_to.strip()),
-            )
+            logger.warning("Order email skipped — Resend not configured")
             return
 
         def _send() -> None:
