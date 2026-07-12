@@ -6,6 +6,15 @@ import type { CustomLeg } from './CustomLegsEditor';
 import { EntryDaysPicker, entryDaysForSave, hasValidEntryDays, normalizeEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
+import {
+  IndicatorEditor,
+  indicatorPayload,
+  indicatorStateFromSaved,
+  type EntryCondition,
+  type IndicatorType,
+  type SupertrendTimeframe,
+} from './IndicatorEditor';
+import { EntryConditionEditor } from './EntryConditionEditor';
 import { formatAmPmTime, HOURS_12, MINUTES, parseAmPmTime } from '../timeUtils';
 
 function TimePicker({
@@ -70,10 +79,19 @@ interface Props {
 }
 
 export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
+  const isIndicators = strategy.strategy_template === 'indicators';
+  const indicatorInit = indicatorStateFromSaved(strategy);
   const entryParsed = parseAmPmTime(strategy.entry_time);
   const endParsed = parseAmPmTime(strategy.end_time);
 
   const [name, setName] = useState(strategy.name);
+  const [indicator, setIndicator] = useState<IndicatorType>(indicatorInit.indicator);
+  const [supertrendLength, setSupertrendLength] = useState(indicatorInit.supertrendLength);
+  const [supertrendFactor, setSupertrendFactor] = useState(indicatorInit.supertrendFactor);
+  const [supertrendTimeframe, setSupertrendTimeframe] = useState<SupertrendTimeframe>(
+    indicatorInit.supertrendTimeframe,
+  );
+  const [entryCondition, setEntryCondition] = useState<EntryCondition>(indicatorInit.entryCondition);
   const [entryDays, setEntryDays] = useState<string[]>(() => normalizeEntryDays(strategy.entry_days ?? []));
   const [entryHour, setEntryHour] = useState(entryParsed.hour);
   const [entryMinute, setEntryMinute] = useState(entryParsed.minute);
@@ -117,7 +135,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
       setMsg('Enter a strategy name');
       return;
     }
-    if (!entryIfEnabled && !hasValidEntryDays(entryDays)) {
+    if (!isIndicators && !entryIfEnabled && !hasValidEntryDays(entryDays)) {
       setMsg('Select Run Once and/or at least one entry day');
       return;
     }
@@ -126,11 +144,22 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
     try {
       const total_profit_pct = parseOptionalPct(totalProfitPct, 'Total profit');
       const total_loss_pct = parseOptionalPct(totalLossPct, 'Total loss');
-      const entryIf = parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh);
+      const entryIf = isIndicators ? {} : parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh);
+      const indicatorFields = isIndicators
+        ? indicatorPayload({
+            indicator,
+            supertrendLength,
+            supertrendFactor,
+            supertrendTimeframe,
+            entryCondition,
+          })
+        : {};
       await api.updateMyStrategy(strategy.id, {
         name: name.trim(),
+        strategy_template: isIndicators ? 'indicators' : 'custom',
+        ...indicatorFields,
         ...entryIf,
-        entry_days: entryIfEnabled ? [] : entryDaysForSave(entryDays),
+        entry_days: !isIndicators && !entryIfEnabled ? entryDaysForSave(entryDays) : [],
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),
@@ -160,25 +189,45 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
             <label className="label">Strategy Name</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <EntryIfEditor
-            enabled={entryIfEnabled}
-            low={entryIfLow}
-            high={entryIfHigh}
-            onEnabledChange={setEntryIfEnabled}
-            onLowChange={setEntryIfLow}
-            onHighChange={setEntryIfHigh}
-          />
-          {!entryIfEnabled && <EntryDaysPicker value={entryDays} onChange={setEntryDays} />}
-          {!entryIfEnabled && (
-            <TimePicker
-              label="Entry Time (IST)"
-              hour={entryHour}
-              minute={entryMinute}
-              ampm={entryAmPm}
-              onHour={setEntryHour}
-              onMinute={setEntryMinute}
-              onAmPm={setEntryAmPm}
-            />
+          {isIndicators ? (
+            <>
+              <IndicatorEditor
+                indicator={indicator}
+                supertrendLength={supertrendLength}
+                supertrendFactor={supertrendFactor}
+                supertrendTimeframe={supertrendTimeframe}
+                onIndicatorChange={setIndicator}
+                onLengthChange={setSupertrendLength}
+                onFactorChange={setSupertrendFactor}
+                onTimeframeChange={setSupertrendTimeframe}
+              />
+              {indicator === 'supertrend' && (
+                <EntryConditionEditor value={entryCondition} onChange={setEntryCondition} />
+              )}
+            </>
+          ) : (
+            <>
+              <EntryIfEditor
+                enabled={entryIfEnabled}
+                low={entryIfLow}
+                high={entryIfHigh}
+                onEnabledChange={setEntryIfEnabled}
+                onLowChange={setEntryIfLow}
+                onHighChange={setEntryIfHigh}
+              />
+              {!entryIfEnabled && <EntryDaysPicker value={entryDays} onChange={setEntryDays} />}
+              {!entryIfEnabled && (
+                <TimePicker
+                  label="Entry Time (IST)"
+                  hour={entryHour}
+                  minute={entryMinute}
+                  ampm={entryAmPm}
+                  onHour={setEntryHour}
+                  onMinute={setEntryMinute}
+                  onAmPm={setEntryAmPm}
+                />
+              )}
+            </>
           )}
           <TimePicker
             label="End Time (IST)"

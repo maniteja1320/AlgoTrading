@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { api, AccountConfig, isApiBaseConfigured } from '../api';
+import {
+  isPushSubscribedLocally,
+  isPushSupported,
+  subscribePushNotifications,
+  unsubscribePushNotifications,
+} from '../pushNotifications';
 
 interface Props {
   config: AccountConfig | null;
@@ -15,6 +21,12 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
   const [env, setEnv] = useState(config?.env ?? 'testnet');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushServerReady, setPushServerReady] = useState(false);
+  const [pushConfigError, setPushConfigError] = useState<string | null>(null);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getConfig()
@@ -23,6 +35,28 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
         setEnv(c.env ?? 'testnet');
       })
       .catch(() => setLiveConfig({ configured: false, env: 'testnet', base_url: '', persisted: false }));
+  }, []);
+
+  useEffect(() => {
+    const supported = isPushSupported();
+    setPushSupported(supported);
+    if (!supported) return;
+
+    api.getPushConfig()
+      .then((config) => {
+        setPushServerReady(config.enabled);
+        setPushConfigError(
+          config.enabled ? null : 'VAPID keys missing in backend .env.',
+        );
+      })
+      .catch(() => {
+        setPushServerReady(false);
+        setPushConfigError('Could not reach backend — ensure it is running on port 8010.');
+      });
+
+    isPushSubscribedLocally()
+      .then(setPushEnabled)
+      .catch(() => setPushEnabled(false));
   }, []);
 
   const save = async () => {
@@ -69,6 +103,25 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
     }
   };
 
+  const togglePush = async () => {
+    setPushLoading(true);
+    setPushError(null);
+    try {
+      if (pushEnabled) {
+        await unsubscribePushNotifications();
+        setPushEnabled(false);
+      } else {
+        await subscribePushNotifications();
+        setPushEnabled(true);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Push notification update failed';
+      setPushError(msg);
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
   const status = liveConfig ?? config;
   const memoryOnly = status?.configured && status.persisted !== true;
 
@@ -92,7 +145,7 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="panel-header">
-          <span>API Settings</span>
+          <span>Settings</span>
           <button className="btn btn-ghost" style={{ padding: 6 }} onClick={onClose}>
             <X size={18} />
           </button>
@@ -104,6 +157,8 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
               <strong>BACKEND_URL</strong> to your backend URL (e.g. https://xxx.up.railway.app), then redeploy.
             </div>
           )}
+
+          <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: -4 }}>API connection</p>
 
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
             Create API keys at{' '}
@@ -169,6 +224,55 @@ export function SettingsModal({ config, onClose, onSaved }: Props) {
               Disconnect
             </button>
           )}
+
+          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+
+          <p style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: -4 }}>Push notifications</p>
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            Order open/close alerts in the browser (same rules as email).
+          </p>
+
+          {!pushSupported ? (
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Not supported in this browser.
+            </p>
+          ) : !pushServerReady ? (
+            <p style={{ fontSize: '0.75rem', color: 'var(--amber, #f59e0b)' }}>
+              {pushConfigError ?? 'Server push is not configured.'}
+            </p>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+              }}
+            >
+              <span style={{ fontSize: '0.85rem' }}>
+                {pushEnabled ? 'Subscribed' : 'Not subscribed'}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={pushEnabled}
+                aria-label={pushEnabled ? 'Unsubscribe from push notifications' : 'Subscribe to push notifications'}
+                className={`toggle ${pushEnabled ? 'toggle-on' : ''}`}
+                disabled={pushLoading}
+                onClick={togglePush}
+              >
+                <span className="toggle-thumb" />
+              </button>
+            </div>
+          )}
+
+          {import.meta.env.DEV && pushServerReady && (
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: -6 }}>
+              Local delivery log: backend/data/push_notifications.log
+            </p>
+          )}
+
+          {pushError && <div style={{ color: 'var(--red)', fontSize: '0.85rem' }}>{pushError}</div>}
         </div>
       </div>
     </div>

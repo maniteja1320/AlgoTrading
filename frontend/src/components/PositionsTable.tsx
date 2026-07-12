@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { api, Position, positionTotalCashflow } from '../api';
+import { api, formatPositionPnl, Position, positionTotalCashflow } from '../api';
 
 interface Props {
   positions: Position[];
@@ -98,7 +98,7 @@ export function PositionsTable({ positions, error, onPositionClosed }: Props) {
                 <td>{parseFloat(p.mark_price || '0').toFixed(2)}</td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <span className={pnl >= 0 ? 'positive' : 'negative'}>{pnl.toFixed(2)}</span>
+                    <span className={pnl >= 0 ? 'positive' : 'negative'}>{formatPositionPnl(p)}</span>
                     <button
                       type="button"
                       className="btn btn-ghost"

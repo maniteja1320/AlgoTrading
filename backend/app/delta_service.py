@@ -111,6 +111,25 @@ class DeltaService:
     def get_ticker(self, symbol: str) -> dict[str, Any]:
         return self._cached(f"ticker:{symbol}", _CACHE_TTL_TICKER, lambda: self.client.get_ticker(symbol))
 
+    def get_candles(
+        self,
+        symbol: str,
+        resolution: str,
+        start: int,
+        end: int,
+        *,
+        cache_ttl: float | None = 30.0,
+    ) -> list[dict[str, Any]]:
+        if cache_ttl is None or cache_ttl <= 0:
+            return self.client.get_candles(symbol, resolution, start, end)
+        bucket = max(1, int(cache_ttl))
+        cache_key = f"candles:{symbol}:{resolution}:{start // 3600}:{end // bucket}"
+        return self._cached(
+            cache_key,
+            cache_ttl,
+            lambda: self.client.get_candles(symbol, resolution, start, end),
+        )
+
     def get_orderbook(self, symbol: str) -> dict[str, Any]:
         return self.client.get_l2_orderbook(symbol)
 
@@ -119,34 +138,34 @@ class DeltaService:
 
     def get_positions(self, product_id: int | None = None, symbol: str | None = None) -> list[dict[str, Any]]:
         """
-        Delta docs: GET /v2/positions/margined with empty params for all open positions.
-        Per-product: GET /v2/positions?product_id=... (size/entry only — pass symbol for mark).
+        Delta docs: GET /v2/positions/margined returns full rows including cashflow P&L.
+        When product_id is set, filter margined results — the per-product endpoint omits cashflow.
         """
         from delta_rest_client.delta_rest_client import parseResponse
 
         client = self.require_auth()
-        if product_id is not None:
-            result = client.request(
-                "GET",
-                "/v2/positions",
-                query={"product_id": product_id},
-                auth=True,
-            )
-        else:
-            # query must be None (not {}) — empty dict adds "?" to signature and causes mismatch
-            result = client.request(
-                "GET",
-                "/v2/positions/margined",
-                query=None,
-                auth=True,
-            )
+        result = client.request(
+            "GET",
+            "/v2/positions/margined",
+            query=None,
+            auth=True,
+        )
         parsed = parseResponse(result)
         positions = self._normalize_positions(parsed, product_id=product_id)
-        return [
-            _sanitize_for_json(self._map_position_row(p, product_id=product_id, symbol=symbol))
+        mapped = [
+            _sanitize_for_json(
+                self._map_position_row(
+                    p,
+                    product_id=int(p["product_id"]) if p.get("product_id") is not None else product_id,
+                    symbol=symbol or p.get("product_symbol") or p.get("symbol"),
+                )
+            )
             for p in positions
             if isinstance(p, dict)
         ]
+        if product_id is not None:
+            mapped = [p for p in mapped if int(p.get("product_id") or 0) == product_id]
+        return mapped
 
     def fetch_mark_price(self, symbol: str) -> float | None:
         try:

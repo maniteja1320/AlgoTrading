@@ -15,6 +15,8 @@ class PlaceOrderRequest(BaseModel):
     limit_price: str | None = None
     post_only: str = "false"
     reduce_only: str = "false"
+    pnl_amount: float | None = None
+    pnl_pct: float | None = None
 
 
 class CancelOrderRequest(BaseModel):
@@ -50,6 +52,12 @@ class StrategyLeg(BaseModel):
 
 class SavedStrategyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+    strategy_template: str = Field(default="custom", pattern="^(custom|indicators)$")
+    indicator: str = Field(default="none", pattern="^(none|supertrend)$")
+    supertrend_length: int | None = Field(default=None, ge=1, le=100)
+    supertrend_factor: float | None = Field(default=None, gt=0, le=20)
+    supertrend_timeframe: str | None = Field(default=None, pattern="^(5m|15m|1h|4h)$")
+    entry_condition: str = Field(default="close_below", pattern="^(close_below|close_above)$")
     entry_days: list[str] = Field(default_factory=list, min_length=0)
     entry_time: str = Field(default="09:30 AM", description="e.g. 09:30 AM")
     end_time: str = Field(..., description="e.g. 03:30 PM")
@@ -62,6 +70,16 @@ class SavedStrategyCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_entry_mode(self) -> "SavedStrategyCreate":
+        if self.strategy_template == "indicators":
+            self.entry_if_enabled = False
+            self.entry_days = []
+            if self.indicator == "supertrend":
+                if self.supertrend_length is None or self.supertrend_factor is None or not self.supertrend_timeframe:
+                    raise ValueError("Supertrend length, factor, and timeframe are required")
+                if self.entry_condition not in ("close_below", "close_above"):
+                    raise ValueError("Entry condition is required for Supertrend")
+            return self
+
         if self.entry_if_enabled:
             if (
                 self.entry_if_low is not None

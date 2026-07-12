@@ -8,6 +8,18 @@ class Settings(BaseSettings):
     delta_api_secret: str = ""
     delta_env: str = "testnet"
     cors_origins: str = "http://localhost:5173"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    alert_email_to: str = ""
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_claims_email: str = "mailto:admin@example.com"
+
+    @property
+    def vapid_private_key_pem(self) -> str:
+        return self.vapid_private_key.replace("\\n", "\n").strip()
 
     @property
     def base_url(self) -> str:

@@ -4,6 +4,7 @@ from app.delta_service import DeltaService
 from app.strategies.base import (
     BaseStrategy,
     CustomStrategy,
+    IndicatorsStrategy,
     IronCondorStrategy,
     ShortStraddleStrategy,
     StrategyState,
@@ -12,9 +13,9 @@ from app.strategies.base import (
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     ShortStraddleStrategy.id: ShortStraddleStrategy,
     IronCondorStrategy.id: IronCondorStrategy,
+    IndicatorsStrategy.id: IndicatorsStrategy,
     CustomStrategy.id: CustomStrategy,
 }
-
 
 class StrategyManager:
     def __init__(self, delta: DeltaService):

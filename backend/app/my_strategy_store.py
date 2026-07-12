@@ -108,6 +108,7 @@ def update_strategy(strategy_id: str, payload: dict[str, Any]) -> dict[str, Any]
                 "run_once_completed_weekdays",
                 "run_once_scheduled_date",
                 "run_once_activated_at",
+                "last_indicator_signal_time",
             ):
                 updated.pop(key, None)
             data["strategies"][i] = updated
@@ -141,6 +142,8 @@ def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
             s.pop("run_once_any_completed", None)
             s.pop("run_once_completed_weekdays", None)
             s.pop("run_once_scheduled_date", None)
+            s.pop("last_indicator_signal_time", None)
+            s.pop("last_indicator_exit_signal_time", None)
             entry_days = s.get("entry_days") or []
             from app.time_utils import is_run_once, now_ist, parse_ampm_time, weekday_entry_days
 
@@ -231,6 +234,71 @@ def release_entry_claim(strategy_id: str) -> None:
                 s["last_entry_date"] = None
                 break
         _write(data)
+
+
+def try_claim_indicator_entry(strategy_id: str, candle_time: float) -> bool:
+    """Atomically claim an indicator signal candle (prevents double entry on same bar)."""
+    key = str(int(candle_time))
+    with _store_lock():
+        data = _read()
+        for s in data.get("strategies", []):
+            if s.get("id") == strategy_id:
+                if s.get("last_indicator_signal_time") == key:
+                    return False
+                s["last_indicator_signal_time"] = key
+                from app.time_utils import today_ist_str
+
+                s["last_entry_date"] = today_ist_str()
+                _write(data)
+                return True
+        return False
+
+
+def release_indicator_entry_claim(strategy_id: str) -> None:
+    """Clear indicator entry claim so a failed entry can retry on the same candle."""
+    with _store_lock():
+        data = _read()
+        for s in data.get("strategies", []):
+            if s.get("id") == strategy_id:
+                s.pop("last_indicator_signal_time", None)
+                s["last_entry_date"] = None
+                break
+        _write(data)
+
+
+def try_claim_indicator_exit(strategy_id: str, candle_time: float) -> bool:
+    """Atomically claim an indicator trend-flip exit candle (prevents double exit on same bar)."""
+    key = str(int(candle_time))
+    with _store_lock():
+        data = _read()
+        for s in data.get("strategies", []):
+            if s.get("id") == strategy_id:
+                if s.get("last_indicator_exit_signal_time") == key:
+                    return False
+                s["last_indicator_exit_signal_time"] = key
+                _write(data)
+                return True
+        return False
+
+
+def release_indicator_exit_claim(strategy_id: str) -> None:
+    """Clear indicator exit claim so a failed exit can retry on the same candle."""
+    with _store_lock():
+        data = _read()
+        for s in data.get("strategies", []):
+            if s.get("id") == strategy_id:
+                s.pop("last_indicator_exit_signal_time", None)
+                break
+        _write(data)
+
+
+def clear_squared_off_products(strategy_id: str) -> None:
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            s["squared_off_product_ids"] = []
+            break
+    _write(data)
 
 
 def set_run_once_scheduled_date(strategy_id: str, date_str: str) -> bool:

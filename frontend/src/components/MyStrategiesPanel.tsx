@@ -3,6 +3,8 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { api, LockedExitIf, Position, SavedStrategy, strategyCanCloseAll, strategyTotalCashflowPnl, strategyTotalCashflowPnlPct, StrategyLegConfig } from '../api';
 import { EditStrategyModal } from './EditStrategyModal';
 import { formatEntryDays } from './EntryDaysPicker';
+import { expirySlotLabel } from '../expiryUtils';
+import { formatEntryCondition, StrategySupertrendLive } from './IndicatorEditor';
 import { formatExitConditions } from './ExitConditionsEditor';
 
 function getStrategyLegs(s: SavedStrategy): StrategyLegConfig[] {
@@ -32,6 +34,7 @@ function formatExitIfDisplay(low?: number | null, high?: number | null): string 
 function formatLegSummary(
   leg: StrategyLegConfig,
   index: number,
+  activeExpiries: string[],
   lockedExitIf?: Record<string, LockedExitIf>,
 ) {
   const lock = lockedExitIf
@@ -43,7 +46,8 @@ function formatLegSummary(
   } else if (leg.exit_if_enabled) {
     exit = ' · Exit if enabled (locked at entry)';
   }
-  return `Leg ${index + 1}: ${leg.option_type.toUpperCase()} · ATM · ${leg.expiry_slot} · ${leg.side} · ${leg.size}${exit}`;
+  const expiryLabel = expirySlotLabel(leg.expiry_slot, activeExpiries);
+  return `Leg ${index + 1}: ${leg.option_type.toUpperCase()} · ${leg.strike_type ?? 'ATM'} · ${expiryLabel} · ${leg.side} · ${leg.size}${exit}`;
 }
 
 interface Props {
@@ -54,6 +58,7 @@ interface Props {
 
 export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Props) {
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
+  const [activeExpiries, setActiveExpiries] = useState<string[]>([]);
   const [loading, setLoading] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [editing, setEditing] = useState<SavedStrategy | null>(null);
@@ -65,6 +70,20 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Failed to load saved strategies');
     }
+  }, []);
+
+  useEffect(() => {
+    api
+      .getExpirySlots()
+      .then((data) => setActiveExpiries(data.active))
+      .catch(() => setActiveExpiries([]));
+    const t = setInterval(() => {
+      api
+        .getExpirySlots()
+        .then((data) => setActiveExpiries(data.active))
+        .catch(() => {});
+    }, 60000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -223,9 +242,25 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                   </div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.6 }}>
                     {getStrategyLegs(s).map((leg, i) => (
-                      <div key={i}>{formatLegSummary(leg, i, s.locked_exit_if)}</div>
+                      <div key={i}>{formatLegSummary(leg, i, activeExpiries, s.locked_exit_if)}</div>
                     ))}
-                    {s.entry_if_enabled && (s.entry_if_low != null || s.entry_if_high != null) ? (
+                    {s.strategy_template === 'indicators' ? (
+                      <div style={{ marginTop: 4 }}>
+                        Indicator:{' '}
+                        {s.indicator === 'supertrend' ? (
+                          <>
+                            Supertrend ({s.supertrend_length}, {s.supertrend_factor}, {s.supertrend_timeframe})
+                            <StrategySupertrendLive
+                              length={s.supertrend_length}
+                              factor={s.supertrend_factor}
+                              timeframe={s.supertrend_timeframe}
+                            />
+                          </>
+                        ) : (
+                          'None'
+                        )}
+                      </div>
+                    ) : s.entry_if_enabled && (s.entry_if_low != null || s.entry_if_high != null) ? (
                       <div style={{ marginTop: 4 }}>
                         Entry if:{' '}
                         {s.entry_if_low != null && `≤ $${s.entry_if_low.toLocaleString('en-US')}`}
@@ -241,10 +276,21 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                       <div style={{ marginTop: 4 }}>Entry days: {formatEntryDays(s.entry_days)}</div>
                     )}
                     <div>
-                      {s.entry_if_enabled ? 'Entry: price trigger' : `Entry: ${s.entry_time}`} · Square-off:{' '}
-                      {s.end_time} IST
+                      {s.strategy_template === 'indicators'
+                        ? s.indicator === 'supertrend'
+                          ? `Entry: ${formatEntryCondition(s.entry_condition)} on trend change`
+                          : 'Entry: indicator'
+                        : s.entry_if_enabled
+                          ? 'Entry: price trigger'
+                          : `Entry: ${s.entry_time}`}{' '}
+                      · Square-off: {s.end_time} IST
                     </div>
-                    <div>Exit: {formatExitConditions(s.total_profit_pct, s.total_loss_pct)}</div>
+                    <div>
+                      Exit:{' '}
+                      {s.strategy_template === 'indicators' && s.indicator === 'supertrend'
+                        ? `trend flip (${s.supertrend_timeframe}), ${formatExitConditions(s.total_profit_pct, s.total_loss_pct)}, exit if, close all, end time on expiry`
+                        : formatExitConditions(s.total_profit_pct, s.total_loss_pct)}
+                    </div>
                     {running && s.combined_entry_premium == null && s.last_entry_date && (
                       <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
                         Combined entry premium: locking at fill…

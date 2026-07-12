@@ -5,6 +5,8 @@ frontend/dist/
 backend/venv/
 backend/.env
 backend/data/api_credentials.json
+backend/data/push_subscriptions.json
+backend/data/push_notifications.log
 __pycache__/
 *.pyc
 *.pyo

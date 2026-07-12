@@ -268,7 +268,7 @@ class CustomStrategy(BaseStrategy):
             order_type=order_type,
         )
         self.state.log(f"Order placed for {symbol}")
-        return {"symbol": symbol, "side": side, "order": order}
+        return {"symbol": symbol, "side": side, "size": size, "order": order}
 
     def run_once(self, expiry_date: str) -> dict[str, Any]:
         legs = self._build_legs_from_params()
@@ -289,3 +289,11 @@ class CustomStrategy(BaseStrategy):
             "legs_executed": len(orders),
         }
         return {"orders": orders, "metadata": self.state.metadata}
+
+
+class IndicatorsStrategy(CustomStrategy):
+    """Indicator-based strategy — same leg controls as Custom."""
+
+    id = "indicators"
+    name = "Indicators"
+    description = "Indicator-driven entries — Supertrend and more."

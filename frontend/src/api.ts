@@ -84,6 +84,22 @@ export function positionTotalCashflow(p: Position): number {
   return (parseFloat(p.realized_cashflow || '0') || 0) + (parseFloat(p.unrealized_cashflow || '0') || 0);
 }
 
+/** Return on premium deployed: (cashflow P&L × 100 × 1000) / (entry × lots). */
+export function positionCashflowPnlPct(p: Position): number | null {
+  const entry = parseFloat(p.entry_price || '0') || 0;
+  const lots = Math.abs(p.size);
+  if (entry <= 0 || lots <= 0) return null;
+  const pnl = positionTotalCashflow(p);
+  return (pnl * 100 * 1000) / (entry * lots);
+}
+
+export function formatPositionPnl(p: Position): string {
+  const pnl = positionTotalCashflow(p);
+  const pct = positionCashflowPnlPct(p);
+  if (pct == null) return pnl.toFixed(2);
+  return `${pnl.toFixed(2)} (${pct.toFixed(2)}%)`;
+}
+
 export interface StrategyLegConfig {
   option_type: string;
   strike_type: string;
@@ -103,9 +119,28 @@ export interface LockedExitIf {
   leg_entry_premium?: number;
 }
 
+export interface SupertrendResult {
+  value: number;
+  direction: 'up' | 'down';
+  close: number;
+  bars_used: number;
+  length: number;
+  factor: number;
+  timeframe: string;
+  candle_time?: number | null;
+  is_forming_candle?: boolean | null;
+  fetched_at?: number;
+}
+
 export interface SavedStrategy {
   id: string;
   name: string;
+  strategy_template?: 'custom' | 'indicators';
+  indicator?: 'none' | 'supertrend';
+  supertrend_length?: number | null;
+  supertrend_factor?: number | null;
+  supertrend_timeframe?: string | null;
+  entry_condition?: 'close_below' | 'close_above' | null;
   entry_days?: string[];
   entry_time: string;
   end_time: string;
@@ -247,6 +282,12 @@ export function strategyTotalCashflowPnlPct(strategy: SavedStrategy, positions: 
 
 export interface SavedStrategyPayload {
   name: string;
+  strategy_template?: 'custom' | 'indicators';
+  indicator?: 'none' | 'supertrend';
+  supertrend_length?: number;
+  supertrend_factor?: number;
+  supertrend_timeframe?: string;
+  entry_condition?: 'close_below' | 'close_above';
   entry_days: string[];
   entry_time: string;
   end_time: string;
@@ -283,6 +324,10 @@ export const api = {
     throw new Error(`${lastError}. Restart the backend (see restart.ps1) and try again.`);
   },
   getFutures: () => request<Record<string, string>>('/api/market/futures'),
+  getSupertrend: (params: { length: number; factor: number; timeframe: string }) =>
+    request<SupertrendResult>(
+      `/api/market/supertrend?length=${params.length}&factor=${params.factor}&timeframe=${encodeURIComponent(params.timeframe)}&_=${Date.now()}`,
+    ),
   getSpot: () => request<Record<string, string>>('/api/market/spot'),
   getExpiries: () => request<string[]>('/api/market/expiries'),
   getExpirySlots: () =>
@@ -313,6 +358,8 @@ export const api = {
   closePosition: (position: Position) => {
     const size = Math.abs(position.size);
     const side = position.size > 0 ? 'sell' : 'buy';
+    const pnlAmount = positionTotalCashflow(position);
+    const pnlPct = positionCashflowPnlPct(position);
     return request('/api/trading/orders', {
       method: 'POST',
       body: JSON.stringify({
@@ -321,6 +368,8 @@ export const api = {
         side,
         order_type: 'market_order',
         reduce_only: 'true',
+        pnl_amount: pnlAmount,
+        ...(pnlPct != null ? { pnl_pct: pnlPct } : {}),
       }),
     });
   },
@@ -355,4 +404,25 @@ export const api = {
     }),
   deleteMyStrategy: (id: string) =>
     request(`/api/my-strategies/${id}`, { method: 'DELETE' }),
+
+  getPushConfig: () => request<PushConfig>('/api/notifications/config'),
+  subscribePush: (subscription: PushSubscriptionJSON) =>
+    request<{ status: string }>('/api/notifications/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({
+        endpoint: subscription.endpoint,
+        keys: subscription.keys ?? {},
+      }),
+    }),
+  unsubscribePush: (body: { endpoint: string }) =>
+    request<{ status: string }>('/api/notifications/unsubscribe', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };
+
+export interface PushConfig {
+  enabled: boolean;
+  vapid_public_key: string;
+  subscribed_count: number;
+}

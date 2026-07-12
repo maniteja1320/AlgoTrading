@@ -6,12 +6,37 @@ import type { CustomLeg } from './CustomLegsEditor';
 import { DEFAULT_ENTRY_DAYS, EntryDaysPicker, entryDaysForSave, hasValidEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
+import {
+  DEFAULT_INDICATOR_STATE,
+  IndicatorEditor,
+  indicatorPayload,
+  type EntryCondition,
+  type IndicatorType,
+  type SupertrendTimeframe,
+} from './IndicatorEditor';
+import { EntryConditionEditor } from './EntryConditionEditor';
 import { formatAmPmTime, HOURS_12, MINUTES } from '../timeUtils';
 
 interface Strategy {
   id: string;
   name: string;
   description: string;
+}
+
+const INDICATORS_STRATEGY: Strategy = {
+  id: 'indicators',
+  name: 'Indicators',
+  description: 'Indicator-driven entries — Supertrend and more.',
+};
+
+function withIndicatorsStrategy(list: Strategy[]): Strategy[] {
+  if (list.some((s) => s.id === 'indicators')) return list;
+  const ironIdx = list.findIndex((s) => s.id === 'iron_condor');
+  const customIdx = list.findIndex((s) => s.id === 'custom');
+  const insertAt = ironIdx >= 0 ? ironIdx + 1 : customIdx >= 0 ? customIdx : list.length;
+  const next = [...list];
+  next.splice(insertAt, 0, INDICATORS_STRATEGY);
+  return next;
 }
 
 interface Props {
@@ -89,8 +114,8 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   const [entryHour, setEntryHour] = useState(9);
   const [entryMinute, setEntryMinute] = useState(30);
   const [entryAmPm, setEntryAmPm] = useState<'AM' | 'PM'>('AM');
-  const [endHour, setEndHour] = useState(3);
-  const [endMinute, setEndMinute] = useState(30);
+  const [endHour, setEndHour] = useState(5);
+  const [endMinute, setEndMinute] = useState(15);
   const [endAmPm, setEndAmPm] = useState<'AM' | 'PM'>('PM');
   const [customLegs, setCustomLegs] = useState<CustomLeg[]>(() => [
     createLeg({ option_type: 'call' }),
@@ -102,10 +127,19 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   const [entryIfLow, setEntryIfLow] = useState('');
   const [entryIfHigh, setEntryIfHigh] = useState('');
   const [expirySlots, setExpirySlots] = useState<string[]>([]);
+  const [indicator, setIndicator] = useState<IndicatorType>(DEFAULT_INDICATOR_STATE.indicator);
+  const [supertrendLength, setSupertrendLength] = useState(DEFAULT_INDICATOR_STATE.supertrendLength);
+  const [supertrendFactor, setSupertrendFactor] = useState(DEFAULT_INDICATOR_STATE.supertrendFactor);
+  const [supertrendTimeframe, setSupertrendTimeframe] = useState<SupertrendTimeframe>(
+    DEFAULT_INDICATOR_STATE.supertrendTimeframe,
+  );
+  const [entryCondition, setEntryCondition] = useState<EntryCondition>(DEFAULT_INDICATOR_STATE.entryCondition);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const isCustom = selectedId === 'custom';
+  const isIndicators = selectedId === 'indicators';
+  const isLegBuilder = isCustom || isIndicators;
 
   useEffect(() => {
     setSelectedExpiry(expiry);
@@ -114,11 +148,12 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   const refresh = async () => {
     try {
       const [list, st] = await Promise.all([api.listStrategies(), api.getStrategyStatus()]);
-      setStrategies(list);
+      const all = withIndicatorsStrategy(list);
+      setStrategies(all);
       setStatus(st as Record<string, { status: string; logs?: string[] }>);
       setSelectedId((current) => {
-        if (current && list.some((s) => s.id === current)) return current;
-        return list[0]?.id ?? '';
+        if (current && all.some((s) => s.id === current)) return current;
+        return all[0]?.id ?? '';
       });
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Failed to load strategies');
@@ -144,12 +179,12 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
     return () => clearInterval(t);
   }, [loadExpirySlots]);
 
-  const saveCustom = async () => {
+  const saveLegBuilder = async (template: 'custom' | 'indicators') => {
     if (!strategyName.trim()) {
       setMsg('Enter a strategy name');
       return;
     }
-    if (!entryIfEnabled && !hasValidEntryDays(entryDays)) {
+    if (template === 'custom' && !entryIfEnabled && !hasValidEntryDays(entryDays)) {
       setMsg('Select Run Once and/or at least one entry day');
       return;
     }
@@ -158,11 +193,23 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
     try {
       const total_profit_pct = parseOptionalPct(totalProfitPct, 'Total profit');
       const total_loss_pct = parseOptionalPct(totalLossPct, 'Total loss');
-      const entryIf = parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh);
+      const entryIf = template === 'custom' ? parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh) : {};
+      const indicatorFields =
+        template === 'indicators'
+          ? indicatorPayload({
+              indicator,
+              supertrendLength,
+              supertrendFactor,
+              supertrendTimeframe,
+              entryCondition,
+            })
+          : {};
       await api.saveMyStrategy({
         name: strategyName.trim(),
+        strategy_template: template,
+        ...indicatorFields,
         ...entryIf,
-        entry_days: entryIfEnabled ? [] : entryDaysForSave(entryDays),
+        entry_days: template === 'custom' && !entryIfEnabled ? entryDaysForSave(entryDays) : [],
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),
@@ -265,7 +312,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
       <div className="panel">
         <div className="panel-header">Strategy Controls</div>
         <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {isCustom && (
+          {isLegBuilder && (
             <>
               <div>
                 <label className="label">Strategy Name</label>
@@ -276,25 +323,46 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                   placeholder="e.g. ATM Straddle"
                 />
               </div>
-              <EntryIfEditor
-                enabled={entryIfEnabled}
-                low={entryIfLow}
-                high={entryIfHigh}
-                onEnabledChange={setEntryIfEnabled}
-                onLowChange={setEntryIfLow}
-                onHighChange={setEntryIfHigh}
-              />
-              {!entryIfEnabled && <EntryDaysPicker value={entryDays} onChange={setEntryDays} />}
-              {!entryIfEnabled && (
-                <TimePicker
-                  label="Entry Time (IST)"
-                  hour={entryHour}
-                  minute={entryMinute}
-                  ampm={entryAmPm}
-                  onHour={setEntryHour}
-                  onMinute={setEntryMinute}
-                  onAmPm={setEntryAmPm}
-                />
+              {isIndicators && (
+                <>
+                  <IndicatorEditor
+                    indicator={indicator}
+                    supertrendLength={supertrendLength}
+                    supertrendFactor={supertrendFactor}
+                    supertrendTimeframe={supertrendTimeframe}
+                    onIndicatorChange={setIndicator}
+                    onLengthChange={setSupertrendLength}
+                    onFactorChange={setSupertrendFactor}
+                    onTimeframeChange={setSupertrendTimeframe}
+                  />
+                  {indicator === 'supertrend' && (
+                    <EntryConditionEditor value={entryCondition} onChange={setEntryCondition} />
+                  )}
+                </>
+              )}
+              {isCustom && (
+                <>
+                  <EntryIfEditor
+                    enabled={entryIfEnabled}
+                    low={entryIfLow}
+                    high={entryIfHigh}
+                    onEnabledChange={setEntryIfEnabled}
+                    onLowChange={setEntryIfLow}
+                    onHighChange={setEntryIfHigh}
+                  />
+                  {!entryIfEnabled && <EntryDaysPicker value={entryDays} onChange={setEntryDays} />}
+                  {!entryIfEnabled && (
+                    <TimePicker
+                      label="Entry Time (IST)"
+                      hour={entryHour}
+                      minute={entryMinute}
+                      ampm={entryAmPm}
+                      onHour={setEntryHour}
+                      onMinute={setEntryMinute}
+                      onAmPm={setEntryAmPm}
+                    />
+                  )}
+                </>
               )}
               <TimePicker
                 label="End Time (IST)"
@@ -315,7 +383,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
             </>
           )}
 
-          {!isCustom && (
+          {!isLegBuilder && (
             <>
               <div>
                 <label className="label">Expiry</label>
@@ -344,8 +412,13 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
             </>
           )}
 
-          {isCustom ? (
-            <button className="btn btn-primary" disabled={loading} onClick={saveCustom} style={{ width: '100%' }}>
+          {isLegBuilder ? (
+            <button
+              className="btn btn-primary"
+              disabled={loading}
+              onClick={() => saveLegBuilder(isIndicators ? 'indicators' : 'custom')}
+              style={{ width: '100%' }}
+            >
               <Save size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Save
             </button>
           ) : (
@@ -364,7 +437,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
 
           {msg && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{msg}</div>}
 
-          {!isCustom && active?.logs && active.logs.length > 0 && (
+          {!isLegBuilder && active?.logs && active.logs.length > 0 && (
             <div>
               <div className="label">Logs</div>
               <pre

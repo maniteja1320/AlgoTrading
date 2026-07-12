@@ -22,14 +22,17 @@ def _validate_strategy_body(body: SavedStrategyCreate) -> dict:
 
     try:
         parse_ampm_time(body.end_time)
-        if body.entry_if_enabled:
+        if body.strategy_template == "indicators":
+            entry_days: list[str] = []
+            entry_time = body.entry_time or "09:30 AM"
+        elif body.entry_if_enabled:
             if (
                 body.entry_if_low is not None
                 and body.entry_if_high is not None
                 and body.entry_if_low >= body.entry_if_high
             ):
                 raise ValueError("Entry if lower must be less than upper when both are set")
-            entry_days: list[str] = []
+            entry_days = []
             entry_time = body.entry_time or "09:30 AM"
         else:
             entry_days = validate_entry_days(body.entry_days)
@@ -40,9 +43,11 @@ def _validate_strategy_body(body: SavedStrategyCreate) -> dict:
     payload = body.model_dump()
     payload["entry_days"] = entry_days
     payload["entry_time"] = entry_time
-    if not body.entry_if_enabled:
+    if body.strategy_template == "indicators" or not body.entry_if_enabled:
         payload.pop("entry_if_low", None)
         payload.pop("entry_if_high", None)
+    if body.strategy_template == "indicators":
+        payload["entry_if_enabled"] = False
     return payload
 
 

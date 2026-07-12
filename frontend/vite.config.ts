@@ -7,7 +7,14 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectRegister: 'auto',
       includeAssets: ['icon.svg'],
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,ico,svg,woff2}'],
+      },
       manifest: {
         name: 'Delta BTC Options Algo',
         short_name: 'BTC Algo',
@@ -49,6 +56,10 @@ export default defineConfig({
           },
         ],
       },
+      devOptions: {
+        enabled: true,
+        type: 'module',
+      },
     }),
   ],
   server: {
@@ -59,8 +70,8 @@ export default defineConfig({
       Expires: '0',
     },
     proxy: {
-      '/api': 'http://localhost:8003',
-      '/health': 'http://localhost:8003',
+      '/api': 'http://localhost:8010',
+      '/health': 'http://localhost:8010',
     },
   },
 })

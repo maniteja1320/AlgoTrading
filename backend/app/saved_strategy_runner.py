@@ -22,6 +22,11 @@ logger = logging.getLogger("uvicorn.error")
 _runner_task: asyncio.Task | None = None
 
 
+def _indicator_poll_interval_seconds(saved: dict) -> float:
+    tf = saved.get("supertrend_timeframe") or "5m"
+    return {"5m": 5.0, "15m": 15.0, "1h": 30.0, "4h": 60.0}.get(str(tf), 5.0)
+
+
 def _poll_interval_seconds() -> float:
     """Shorter poll when entries, exits, or price triggers are likely."""
     running = get_running_strategies()
@@ -32,6 +37,9 @@ def _poll_interval_seconds() -> float:
     today = today_ist_str()
 
     for saved in running:
+        if saved.get("strategy_template") == "indicators" and saved.get("indicator") == "supertrend":
+            return _indicator_poll_interval_seconds(saved)
+
         if saved.get("entry_if_enabled") and saved.get("last_entry_date") != today:
             return 3.0
 

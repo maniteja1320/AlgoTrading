@@ -47,24 +47,57 @@ def _position_total_cashflow(pos: dict[str, Any]) -> float:
             return float(total)
         except (TypeError, ValueError):
             pass
-    realized = float(pos.get("realized_cashflow") or 0)
-    unrealized = float(pos.get("unrealized_cashflow") or 0)
+    realized = float(pos.get("realized_cashflow") or pos.get("realized_pnl") or 0)
+    unrealized = float(pos.get("unrealized_cashflow") or pos.get("unrealized_pnl") or 0)
     return realized + unrealized
 
 
-def compute_strategy_cashflow_pnl_pct(
+def position_total_cashflow(pos: dict[str, Any]) -> float:
+    return _position_total_cashflow(pos)
+
+
+def compute_leg_cashflow_pnl_pct(pos: dict[str, Any]) -> float | None:
+    """Return on premium deployed for one leg: (cashflow P&L × 100 × 1000) / (entry × lots)."""
+    try:
+        entry = float(pos.get("entry_price") or 0)
+        lots = abs(int(pos.get("size") or 0))
+    except (TypeError, ValueError):
+        return None
+    if entry <= 0 or lots <= 0:
+        return None
+    pnl = _position_total_cashflow(pos)
+    return (pnl * 100 * 1000) / (entry * lots)
+
+
+def snapshot_manual_close_pnl(
+    delta: DeltaService,
+    product_id: int,
+) -> tuple[float | None, float | None]:
+    """Read leg cashflow P&L immediately before a manual reduce-only close."""
+    try:
+        for pos in delta.get_positions():
+            if not isinstance(pos, dict) or pos.get("size", 0) == 0:
+                continue
+            try:
+                pid = int(pos.get("product_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if pid != int(product_id):
+                continue
+            amount = position_total_cashflow(pos)
+            pct = compute_leg_cashflow_pnl_pct(pos)
+            return amount, pct
+    except Exception:
+        return None, None
+    return None, None
+
+
+def compute_strategy_cashflow_pnl_amount(
     saved: dict[str, Any],
     monitoring_legs: list[dict[str, Any]],
     positions_map: dict[int, dict[str, Any]],
 ) -> float | None:
-    """
-    Same formula as frontend Live P&L %:
-    (strategy cashflow P&L × 1000 × 100) / (combined entry premium × size).
-    """
-    combined_premium = saved.get("combined_entry_premium")
-    if combined_premium is None or float(combined_premium) <= 0:
-        return None
-
+    """Strategy combined cashflow P&L amount (same basis as frontend Live P&L)."""
     if not monitoring_legs:
         return None
 
@@ -90,6 +123,41 @@ def compute_strategy_cashflow_pnl_pct(
         matched += 1
 
     if matched < len(monitoring_legs):
+        return None
+    return total_pnl
+
+
+def format_pnl_alert_label(amount: float | None, pct: float | None) -> str | None:
+    if amount is None and pct is None:
+        return None
+    if (amount is None or abs(amount) < 1e-9) and (pct is None or abs(pct) < 1e-9):
+        return None
+    amount_part = f"{amount:+.2f}" if amount is not None else None
+    pct_part = f"({pct:+.2f}%)" if pct is not None else None
+    if amount_part and pct_part:
+        return f"{amount_part} {pct_part}"
+    return amount_part or pct_part
+
+
+def compute_strategy_cashflow_pnl_pct(
+    saved: dict[str, Any],
+    monitoring_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+) -> float | None:
+    """
+    Same formula as frontend Live P&L %:
+    (strategy cashflow P&L × 1000 × 100) / (combined entry premium × size).
+    """
+    combined_premium = saved.get("combined_entry_premium")
+    if combined_premium is None or float(combined_premium) <= 0:
+        return None
+
+    total_pnl = compute_strategy_cashflow_pnl_amount(saved, monitoring_legs, positions_map)
+    if total_pnl is None:
+        return None
+
+    size = int(monitoring_legs[0].get("size") or saved.get("size") or 1)
+    if size <= 0:
         return None
 
     return (total_pnl * 1000 * 100) / (float(combined_premium) * size)

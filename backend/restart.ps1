@@ -1,6 +1,5 @@
-# Stop processes on port 8003, then start one backend.
-# (Port 8002 may retain stale Windows socket listeners after crashed uvicorn processes.)
-$port = 8003
+# Stop processes on port 8010, then start one backend.
+$port = 8010
 for ($i = 0; $i -lt 6; $i++) {
   netstat -ano | Select-String ":$port\s" | Select-String "LISTENING" | ForEach-Object {
     $processId = ($_.Line -split '\s+')[-1]

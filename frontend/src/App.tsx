@@ -11,7 +11,7 @@ import { MyStrategiesPanel } from './components/MyStrategiesPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { useOpenPositions } from './useOpenPositions';
 
-const REFRESH_MS = 60_000;
+const REFRESH_MS = 5_000;
 
 type Tab = 'chain' | 'positions' | 'orders' | 'strategies' | 'my_strategies';
 
@@ -97,10 +97,10 @@ export default function App() {
   }, [loadMarket, refreshConfig]);
 
   useEffect(() => {
-    const onFocus = () => refreshConfig();
+    const onFocus = () => refreshAll();
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [refreshConfig]);
+  }, [refreshAll]);
 
   useEffect(() => {
     if (selectedExpiry) loadChain(false);
@@ -271,4 +271,4 @@ export default function App() {
     </div>
   );
 }
-
+
