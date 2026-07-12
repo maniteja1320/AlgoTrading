@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
+    smtp_use_ssl: bool = False
     alert_email_to: str = ""
     vapid_public_key: str = ""
     vapid_private_key: str = ""
@@ -40,6 +41,13 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return _strip_env_quotes(value)
         return value
+
+    @property
+    def smtp_password_normalized(self) -> str:
+        pwd = self.smtp_password.strip()
+        if "gmail.com" in self.smtp_host.lower():
+            return pwd.replace(" ", "")
+        return pwd
 
     @property
     def vapid_private_key_pem(self) -> str:

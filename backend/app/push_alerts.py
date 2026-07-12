@@ -111,6 +111,25 @@ def _push_body_first_line_with_pnl(
     return f"{line} · P&L {pnl_label}"
 
 
+def _append_pnl_to_body(body: str, event: AlertEvent, pnl_amount: float | None, pnl_pct: float | None) -> str:
+    if event != "closed":
+        return body
+    pnl_label = format_pnl_alert_label(pnl_amount, pnl_pct)
+    if not pnl_label:
+        return body
+    return f"{body}\nP&L: {pnl_label}"
+
+
+def _log_closed_pnl(event: AlertEvent, pnl_amount: float | None, pnl_pct: float | None, label: str) -> None:
+    if event != "closed":
+        return
+    pnl_label = format_pnl_alert_label(pnl_amount, pnl_pct)
+    if pnl_label:
+        append_push_log("PNL", f"{label} | {pnl_label}")
+    else:
+        append_push_log("PNL", f"{label} | missing (amount={pnl_amount!r} pct={pnl_pct!r})")
+
+
 def notify_order_push(
     *,
     event: AlertEvent,
@@ -144,6 +163,7 @@ def notify_order_push(
         body = first_line
         if reason:
             body += f"\n{reason}"
+        _log_closed_pnl(event, pnl_amount, pnl_pct, f"{strategy_label} — {label}")
 
         def _send() -> None:
             try:
@@ -185,6 +205,8 @@ def notify_strategy_orders_push(
         body = _format_leg_lines(legs)
         if reason:
             body += f"\n{reason}"
+        body = _append_pnl_to_body(body, event, pnl_amount, pnl_pct)
+        _log_closed_pnl(event, pnl_amount, pnl_pct, f"{strategy_name} — {label}")
 
         def _send() -> None:
             try:

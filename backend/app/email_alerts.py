@@ -30,14 +30,40 @@ def _send_email_sync(subject: str, body: str) -> None:
     msg["From"] = settings.smtp_user.strip()
     msg["To"] = settings.alert_email_to.strip()
 
-    with smtplib.SMTP(settings.smtp_host.strip(), settings.smtp_port, timeout=30) as smtp:
-        smtp.starttls()
-        smtp.login(settings.smtp_user.strip(), settings.smtp_password.strip())
-        smtp.sendmail(
-            settings.smtp_user.strip(),
-            [settings.alert_email_to.strip()],
-            msg.as_string(),
-        )
+    host = settings.smtp_host.strip()
+    port = settings.smtp_port
+    user = settings.smtp_user.strip()
+    password = settings.smtp_password_normalized
+    use_ssl = settings.smtp_use_ssl or port == 465
+
+    logger.info("Sending email via %s:%s ssl=%s to %s", host, port, use_ssl, settings.alert_email_to.strip())
+
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+            smtp.login(user, password)
+            smtp.sendmail(user, [settings.alert_email_to.strip()], msg.as_string())
+    else:
+        with smtplib.SMTP(host, port, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(user, password)
+            smtp.sendmail(user, [settings.alert_email_to.strip()], msg.as_string())
+
+    logger.info("Email sent: %s", subject)
+
+
+def send_test_email() -> None:
+    """Send a test alert email; raises on SMTP failure."""
+    if not email_alerts_enabled():
+        raise RuntimeError("SMTP is not fully configured")
+    _send_email_sync(
+        "[BTC Algo] Test email",
+        "This is a test alert from your BTC Algo backend.\n\nIf you received this, SMTP is working.\n",
+    )
+
+
+def _start_email_thread(target) -> None:
+    # Non-daemon so Railway/uvicorn does not drop SMTP mid-send.
+    threading.Thread(target=target, daemon=False).start()
 
 
 def notify_order_email(
@@ -90,7 +116,7 @@ def notify_order_email(
             except Exception:
                 logger.exception("Order email alert failed for %s %s %s", side, size, symbol)
 
-        threading.Thread(target=_send, daemon=True).start()
+        _start_email_thread(_send)
     except Exception:
         logger.exception("Failed to queue order email alert for %s", symbol)
 
@@ -143,6 +169,6 @@ def notify_strategy_orders_email(
             except Exception:
                 logger.exception("Strategy batch email alert failed for %s", strategy_name)
 
-        threading.Thread(target=_send, daemon=True).start()
+        _start_email_thread(_send)
     except Exception:
         logger.exception("Failed to queue strategy batch email alert for %s", strategy_name)

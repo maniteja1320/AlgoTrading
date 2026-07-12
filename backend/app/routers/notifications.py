@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.config import settings
-from app.email_alerts import email_alerts_enabled
+from app.email_alerts import email_alerts_enabled, send_test_email
 from app.push_alerts import push_alerts_enabled
 from app.push_subscription_store import add_subscription, list_subscriptions, remove_subscription
 
@@ -65,6 +65,18 @@ def get_notifications_status():
         "vapid_claims_email_set": bool(settings.vapid_claims_email.strip()),
         "hints": hints,
     }
+
+
+@router.post("/test-email")
+def send_notifications_test_email():
+    """Send one test email using backend SMTP settings (Railway troubleshooting)."""
+    if not email_alerts_enabled():
+        raise HTTPException(status_code=503, detail="SMTP is not fully configured on backend")
+    try:
+        send_test_email()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"SMTP send failed: {exc}") from exc
+    return {"status": "sent", "to": settings.alert_email_to.strip()}
 
 
 @router.post("/subscribe")
