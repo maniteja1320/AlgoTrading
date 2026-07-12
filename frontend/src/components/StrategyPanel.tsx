@@ -18,6 +18,7 @@ import {
 } from './IndicatorEditor';
 import { EntryConditionEditor } from './EntryConditionEditor';
 import { formatAmPmTime, HOURS_12, MINUTES } from '../timeUtils';
+import { CRYPTO_OPTIONS, CryptoAsset } from '../cryptoAssets';
 
 interface Strategy {
   id: string;
@@ -44,6 +45,7 @@ function withIndicatorsStrategy(list: Strategy[]): Strategy[] {
 interface Props {
   expiry: string;
   expiries: string[];
+  chainAsset: CryptoAsset;
   onRefresh: () => void;
   onSaved?: () => void;
 }
@@ -103,7 +105,7 @@ function buildParams(
   }
 }
 
-export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
+export function StrategyPanel({ expiry, expiries, chainAsset, onRefresh, onSaved }: Props) {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [status, setStatus] = useState<Record<string, { status: string; logs?: string[] }>>({});
   const [selectedId, setSelectedId] = useState('');
@@ -126,6 +128,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   const [totalProfitPct, setTotalProfitPct] = useState('');
   const [totalLossPct, setTotalLossPct] = useState('');
   const [trailingProfits, setTrailingProfits] = useState<TrailingProfit[]>([]);
+  const [cryptoAsset, setCryptoAsset] = useState<CryptoAsset>('BTC');
   const [entryIfEnabled, setEntryIfEnabled] = useState(false);
   const [entryIfLow, setEntryIfLow] = useState('');
   const [entryIfHigh, setEntryIfHigh] = useState('');
@@ -165,12 +168,12 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
 
   const loadExpirySlots = useCallback(async () => {
     try {
-      const data = await api.getExpirySlots();
+      const data = await api.getExpirySlots(cryptoAsset);
       setExpirySlots(data.active);
     } catch {
       setExpirySlots([]);
     }
-  }, []);
+  }, [cryptoAsset]);
 
   useEffect(() => {
     refresh();
@@ -211,6 +214,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
           : {};
       await api.saveMyStrategy({
         name: strategyName.trim(),
+        asset: cryptoAsset,
         strategy_template: template,
         ...indicatorFields,
         ...entryIf,
@@ -238,7 +242,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
       await api.startStrategy({
         strategy_id: selectedId,
         expiry_date: selectedExpiry,
-        params: buildParams(selectedId, { minPremium, wingWidth, size }),
+        params: { ...buildParams(selectedId, { minPremium, wingWidth, size }), asset: chainAsset },
       });
       setMsg('Strategy started');
       refresh();
@@ -321,6 +325,18 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
           {isLegBuilder && (
             <>
               <div>
+                <label className="label">Crypto</label>
+                <select
+                  className="input"
+                  value={cryptoAsset}
+                  onChange={(e) => setCryptoAsset(e.target.value as CryptoAsset)}
+                >
+                  {CRYPTO_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label className="label">Strategy Name</label>
                 <input
                   className="input"
@@ -336,6 +352,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                     supertrendLength={supertrendLength}
                     supertrendFactor={supertrendFactor}
                     supertrendTimeframe={supertrendTimeframe}
+                    asset={cryptoAsset}
                     onIndicatorChange={setIndicator}
                     onLengthChange={setSupertrendLength}
                     onFactorChange={setSupertrendFactor}
@@ -352,6 +369,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                     enabled={entryIfEnabled}
                     low={entryIfLow}
                     high={entryIfHigh}
+                    asset={cryptoAsset}
                     onEnabledChange={setEntryIfEnabled}
                     onLowChange={setEntryIfLow}
                     onHighChange={setEntryIfHigh}
@@ -379,11 +397,12 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                 onMinute={setEndMinute}
                 onAmPm={setEndAmPm}
               />
-              <CustomLegsEditor legs={customLegs} activeExpiries={expirySlots} onChange={setCustomLegs} />
+              <CustomLegsEditor legs={customLegs} activeExpiries={expirySlots} asset={cryptoAsset} onChange={setCustomLegs} />
               <TrailingProfitEditor trails={trailingProfits} onChange={setTrailingProfits} />
               <ExitConditionsEditor
                 totalProfit={totalProfitPct}
                 totalLoss={totalLossPct}
+                asset={cryptoAsset}
                 onTotalProfitChange={setTotalProfitPct}
                 onTotalLossChange={setTotalLossPct}
               />

@@ -7,6 +7,7 @@ import { expirySlotLabel } from '../expiryUtils';
 import { formatEntryCondition, StrategySupertrendLive } from './IndicatorEditor';
 import { formatExitConditions } from './ExitConditionsEditor';
 import { formatTrailingProfits } from './TrailingProfitEditor';
+import { normalizeCryptoAsset } from '../cryptoAssets';
 
 function formatStrategyExitSummary(s: SavedStrategy): string {
   const trail = formatTrailingProfits(s.trailing_profits);
@@ -197,6 +198,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
             const canCloseAll = strategyCanCloseAll(s, positions);
             const totalPnl = running ? strategyTotalCashflowPnl(s, positions) : null;
             const totalPnlPct = running ? strategyTotalCashflowPnlPct(s, positions) : null;
+            const asset = normalizeCryptoAsset(s.asset);
             return (
               <div
                 key={s.id}
@@ -225,6 +227,9 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 600 }}>{s.name}</span>
+                    <span className="badge badge-testnet" title="Strategy crypto">
+                      {asset}
+                    </span>
                     <span className={`badge ${running ? 'badge-live' : 'badge-offline'}`}>
                       {running ? 'running' : s.status}
                     </span>
@@ -252,6 +257,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                     )}
                   </div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.6 }}>
+                    <div>Crypto: {asset}</div>
                     {getStrategyLegs(s).map((leg, i) => (
                       <div key={i}>{formatLegSummary(leg, i, activeExpiries, s.locked_exit_if)}</div>
                     ))}
@@ -265,6 +271,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                               length={s.supertrend_length}
                               factor={s.supertrend_factor}
                               timeframe={s.supertrend_timeframe}
+                              asset={asset}
                             />
                           </>
                         ) : (
@@ -277,7 +284,6 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                         {s.entry_if_low != null && `≤ $${s.entry_if_low.toLocaleString('en-US')}`}
                         {s.entry_if_low != null && s.entry_if_high != null && ' or '}
                         {s.entry_if_high != null && `≥ $${s.entry_if_high.toLocaleString('en-US')}`}
-                        {' '}(BTC)
                       </div>
                     ) : s.entry_if_enabled ? (
                       <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>
@@ -364,7 +370,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
           <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
             Use the toggle to start or stop each strategy independently. Multiple strategies can run at the same time.
             Edit is locked while a strategy is running. Entries run on selected days at entry time. Outside the exit-if
-            band, legs square off on BTC breach. Inside the band, exit on total profit or total loss, or at end time on
+            band, legs square off on futures breach. Inside the band, exit on total profit or total loss, or at end time on
             expiry if neither is hit.
           </p>
         </div>

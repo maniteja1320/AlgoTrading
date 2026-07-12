@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.assets import asset_from_symbol, normalize_asset, position_pnl_pct_numerator, strategy_pnl_pct_numerator
 from app.delta_service import DeltaService
 
 
@@ -56,8 +57,11 @@ def position_total_cashflow(pos: dict[str, Any]) -> float:
     return _position_total_cashflow(pos)
 
 
-def compute_leg_cashflow_pnl_pct(pos: dict[str, Any]) -> float | None:
-    """Return on premium deployed for one leg: (cashflow P&L × 100 × 1000) / (entry × lots)."""
+def compute_leg_cashflow_pnl_pct(
+    pos: dict[str, Any],
+    asset: str | None = None,
+) -> float | None:
+    """Return on premium deployed for one leg."""
     try:
         entry = float(pos.get("entry_price") or 0)
         lots = abs(int(pos.get("size") or 0))
@@ -66,7 +70,12 @@ def compute_leg_cashflow_pnl_pct(pos: dict[str, Any]) -> float | None:
     if entry <= 0 or lots <= 0:
         return None
     pnl = _position_total_cashflow(pos)
-    return (pnl * 100 * 1000) / (entry * lots)
+    sym = pos.get("product_symbol") or pos.get("symbol")
+    if isinstance(pos.get("product"), dict):
+        sym = sym or pos["product"].get("symbol")
+    resolved = normalize_asset(asset or asset_from_symbol(str(sym) if sym else None))
+    mult = position_pnl_pct_numerator(resolved)
+    return (pnl * mult) / (entry * lots)
 
 
 def snapshot_manual_close_pnl(
@@ -139,14 +148,39 @@ def format_pnl_alert_label(amount: float | None, pct: float | None) -> str | Non
     return amount_part or pct_part
 
 
+def _strategy_pnl_denominator_size(saved: dict[str, Any]) -> int | None:
+    """Original entry lot size for P&L % — stays fixed after partial trail exits."""
+    locked = saved.get("entry_strategy_size")
+    if locked is not None:
+        try:
+            size = int(locked)
+            if size > 0:
+                return size
+        except (TypeError, ValueError):
+            pass
+    legs = saved.get("legs") or []
+    if legs:
+        try:
+            return int(legs[0].get("size") or 1)
+        except (TypeError, ValueError):
+            pass
+    if saved.get("size"):
+        try:
+            return int(saved["size"])
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
 def compute_strategy_cashflow_pnl_pct(
     saved: dict[str, Any],
     monitoring_legs: list[dict[str, Any]],
     positions_map: dict[int, dict[str, Any]],
 ) -> float | None:
     """
-    Same formula as frontend Live P&L %:
-    (strategy cashflow P&L × 1000 × 100) / (combined entry premium × size).
+    Combined strategy P&L % vs locked entry premium and original entry size.
+    BTC: (strategy P&L × 1000 × 100) / (combined entry premium × size)
+    ETH: (strategy P&L × 100 × 100) / (combined entry premium × size)
     """
     combined_premium = saved.get("combined_entry_premium")
     if combined_premium is None or float(combined_premium) <= 0:
@@ -156,11 +190,12 @@ def compute_strategy_cashflow_pnl_pct(
     if total_pnl is None:
         return None
 
-    size = int(monitoring_legs[0].get("size") or saved.get("size") or 1)
-    if size <= 0:
+    size = _strategy_pnl_denominator_size(saved)
+    if size is None or size <= 0:
         return None
 
-    return (total_pnl * 1000 * 100) / (float(combined_premium) * size)
+    mult = strategy_pnl_pct_numerator(saved.get("asset"))
+    return (total_pnl * mult) / (float(combined_premium) * size)
 
 
 def compute_combined_pnl_pct(open_legs: list[dict[str, Any]]) -> float | None:

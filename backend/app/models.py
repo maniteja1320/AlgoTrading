@@ -57,6 +57,7 @@ class TrailingProfitRule(BaseModel):
 
 class SavedStrategyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+    asset: str = Field(default="BTC", pattern="^(BTC|ETH)$")
     strategy_template: str = Field(default="custom", pattern="^(custom|indicators)$")
     indicator: str = Field(default="none", pattern="^(none|supertrend)$")
     supertrend_length: int | None = Field(default=None, ge=1, le=100)

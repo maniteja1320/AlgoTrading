@@ -2,8 +2,8 @@ import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, StrategyLegConfig } from '../api';
 import { expirySlotLabel, expirySlotOptions, type ExpirySlotOption } from '../expiryUtils';
-
-const EXIT_IF_BUFFER = 200;
+import type { CryptoAsset } from '../cryptoAssets';
+import { exitIfBuffer } from '../cryptoAssets';
 
 export interface CustomLeg {
   uid: string;
@@ -46,10 +46,15 @@ function legPremium(leg: CustomLeg, markPrice: number): number {
   return markPrice;
 }
 
-export function defaultExitIf(atmStrike: number, combinedPremium: number): { low: number; high: number } {
+export function defaultExitIf(
+  atmStrike: number,
+  combinedPremium: number,
+  asset: CryptoAsset = 'BTC',
+): { low: number; high: number } {
+  const buffer = exitIfBuffer(asset);
   return {
-    low: Math.round(atmStrike - combinedPremium + EXIT_IF_BUFFER),
-    high: Math.round(atmStrike + combinedPremium - EXIT_IF_BUFFER),
+    low: Math.round(atmStrike - combinedPremium + buffer),
+    high: Math.round(atmStrike + combinedPremium - buffer),
   };
 }
 
@@ -63,6 +68,7 @@ function legSummary(leg: CustomLeg, activeExpiries: string[]): string {
 interface Props {
   legs: CustomLeg[];
   activeExpiries: string[];
+  asset?: CryptoAsset;
   onChange: (legs: CustomLeg[]) => void;
 }
 
@@ -85,7 +91,7 @@ function LegPreview({ preview }: { preview: LegPreviewData | null }) {
   );
 }
 
-export function CustomLegsEditor({ legs, activeExpiries, onChange }: Props) {
+export function CustomLegsEditor({ legs, activeExpiries, asset = 'BTC', onChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [previews, setPreviews] = useState<Record<string, LegPreviewData>>({});
 
@@ -98,7 +104,7 @@ export function CustomLegsEditor({ legs, activeExpiries, onChange }: Props) {
     const entries = await Promise.all(
       currentLegs.map(async (leg) => {
         try {
-          const p = await api.getCustomPreview(leg.option_type, leg.expiry_slot);
+          const p = await api.getCustomPreview(leg.option_type, leg.expiry_slot, asset);
           return [
             leg.uid,
             {
@@ -117,7 +123,7 @@ export function CustomLegsEditor({ legs, activeExpiries, onChange }: Props) {
       if (data) next[uid] = data;
     }
     setPreviews(next);
-  }, []);
+  }, [asset]);
 
   useEffect(() => {
     fetchPreviews(legs);
@@ -180,7 +186,7 @@ export function CustomLegsEditor({ legs, activeExpiries, onChange }: Props) {
       {legs.map((leg, index) => {
         const isOpen = expanded.has(leg.uid);
         const preview = previews[leg.uid] ?? null;
-        const exitPreview = preview ? defaultExitIf(preview.atm_strike, combinedPremium) : null;
+        const exitPreview = preview ? defaultExitIf(preview.atm_strike, combinedPremium, asset) : null;
         return (
           <div
             key={leg.uid}
@@ -318,7 +324,7 @@ export function CustomLegsEditor({ legs, activeExpiries, onChange }: Props) {
 
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Exit if (BTC futures)</label>
+                    <label className="label" style={{ marginBottom: 0 }}>Exit if ({asset} futures)</label>
                     <button
                       type="button"
                       role="switch"

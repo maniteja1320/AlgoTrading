@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.assets import normalize_asset
 from app.delta_service import DeltaService
 from app.exit_if_utils import combined_entry_premium, compute_exit_if_bounds, leg_entry_premium
 from app.my_strategy_store import (
@@ -157,7 +158,12 @@ def _log_exit_if_pending(saved: dict[str, Any], message: str) -> None:
 
 
 def resolve_saved_legs(delta: DeltaService, saved: dict[str, Any]) -> list[dict[str, Any]]:
-    return resolve_custom_options_batch(delta, _leg_configs(saved))
+    asset = saved.get("asset") or "BTC"
+    return resolve_custom_options_batch(delta, _leg_configs(saved), asset=asset)
+
+
+def _strategy_asset(saved: dict[str, Any]) -> str:
+    return normalize_asset(saved.get("asset"))
 
 
 def _strategy_params_from_resolved(
@@ -367,6 +373,23 @@ def _monitoring_legs(saved: dict[str, Any], resolved_legs: list[dict[str, Any]])
     return entry if entry else resolved_legs
 
 
+def _reload_monitoring_state(
+    sid: str,
+    saved: dict[str, Any],
+    resolved_legs: list[dict[str, Any]],
+    positions_map: dict[int, dict[str, Any]],
+    delta: DeltaService,
+    *,
+    refresh: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[int, dict[str, Any]]]:
+    if not refresh:
+        return saved, _monitoring_legs(saved, resolved_legs), positions_map
+    saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
+    positions_map = _open_positions_map(delta)
+    return saved, monitoring_legs, positions_map
+
+
 def _snapshots_from_locked(
     saved: dict[str, Any],
     leg_configs: list[dict[str, Any]],
@@ -482,7 +505,8 @@ def _try_lock_combined_entry_premium(
         sid,
         f"Combined entry premium ${combined:,.2f} ({' + '.join(premium_parts)})",
     )
-    set_combined_entry_premium(sid, combined)
+    entry_size = min(int(leg.get("size") or 1) for leg in resolved_legs) if resolved_legs else 1
+    set_combined_entry_premium(sid, combined, entry_size)
     return combined
 
 
@@ -533,7 +557,7 @@ def _try_lock_exit_if(
         if not pos:
             continue
         entry_atm = float(leg["atm_strike"])
-        low, high = compute_exit_if_bounds(entry_atm, combined)
+        low, high = compute_exit_if_bounds(entry_atm, combined, asset=_strategy_asset(saved))
         new_locks[pid] = {
             "low": low,
             "high": high,
@@ -557,9 +581,9 @@ def _try_lock_exit_if(
         set_locked_exit_if(sid, new_locks, combined)
 
 
-def _get_btc_futures_price(delta: DeltaService) -> float | None:
+def _get_futures_price(delta: DeltaService, asset: str) -> float | None:
     try:
-        futures = delta.get_btc_futures()
+        futures = delta.get_futures(normalize_asset(asset))
         price = float(futures.get("mark_price") or futures.get("spot_price") or 0)
         return price if price > 0 else None
     except Exception:
@@ -574,41 +598,42 @@ def _entry_if_levels(saved: dict[str, Any]) -> tuple[float | None, float | None]
     return low_f, high_f
 
 
-def _btc_at_entry_if_trigger(saved: dict[str, Any], btc_price: float) -> bool:
-    """True when BTC hits a configured entry-if bound (lower and/or upper)."""
+def _futures_at_entry_if_trigger(saved: dict[str, Any], futures_price: float) -> bool:
+    """True when futures hit a configured entry-if bound (lower and/or upper)."""
     if not saved.get("entry_if_enabled"):
         return False
     low_f, high_f = _entry_if_levels(saved)
     if low_f is None and high_f is None:
         return False
-    if low_f is not None and btc_price <= low_f:
+    if low_f is not None and futures_price <= low_f:
         return True
-    if high_f is not None and btc_price >= high_f:
+    if high_f is not None and futures_price >= high_f:
         return True
     return False
 
 
-def _format_entry_if_trigger(btc_price: float, low_f: float | None, high_f: float | None) -> str:
+def _format_entry_if_trigger(asset: str, futures_price: float, low_f: float | None, high_f: float | None) -> str:
+    label = normalize_asset(asset)
     if low_f is not None and high_f is not None:
         return (
-            f"BTC ${btc_price:,.0f} at or below ${low_f:,.0f} or at or above ${high_f:,.0f}"
+            f"{label} ${futures_price:,.0f} at or below ${low_f:,.0f} or at or above ${high_f:,.0f}"
         )
     if low_f is not None:
-        return f"BTC ${btc_price:,.0f} at or below ${low_f:,.0f}"
+        return f"{label} ${futures_price:,.0f} at or below ${low_f:,.0f}"
     if high_f is not None:
-        return f"BTC ${btc_price:,.0f} at or above ${high_f:,.0f}"
-    return f"BTC ${btc_price:,.0f}"
+        return f"{label} ${futures_price:,.0f} at or above ${high_f:,.0f}"
+    return f"{label} ${futures_price:,.0f}"
 
 
-def _btc_in_exit_if_range(saved: dict[str, Any], btc_price: float) -> bool:
-    """True when BTC is inside the locked exit-if band (safe zone for P&L monitoring)."""
+def _futures_in_exit_if_range(saved: dict[str, Any], futures_price: float) -> bool:
+    """True when futures are inside the locked exit-if band (safe zone for P&L monitoring)."""
     locked = saved.get("locked_exit_if") or {}
     if not locked:
         return True
 
     bounds = next(iter(locked.values()))
     low_f, high_f = float(bounds["low"]), float(bounds["high"])
-    return low_f < btc_price < high_f
+    return low_f < futures_price < high_f
 
 
 def _check_exit_if_price(
@@ -616,18 +641,19 @@ def _check_exit_if_price(
     delta: DeltaService,
     monitoring_legs: list[dict[str, Any]],
     positions_map: dict[int, dict[str, Any]] | None = None,
-    btc_price: float | None = None,
-) -> None:
+    futures_price: float | None = None,
+) -> bool:
     sid = saved["id"]
+    asset = _strategy_asset(saved)
     locked = saved.get("locked_exit_if") or {}
     if not locked:
-        return
+        return False
 
-    if btc_price is None:
-        btc_price = _get_btc_futures_price(delta)
-    if btc_price is None:
-        append_log(sid, "Exit if skipped: could not fetch BTC futures price")
-        return
+    if futures_price is None:
+        futures_price = _get_futures_price(delta, asset)
+    if futures_price is None:
+        append_log(sid, f"Exit if skipped: could not fetch {asset} futures price")
+        return False
 
     if positions_map is None:
         positions_map = _open_positions_map(delta)
@@ -637,12 +663,12 @@ def _check_exit_if_price(
         if not positions_map.get(int(pid)):
             continue
         low_f, high_f = float(bounds["low"]), float(bounds["high"])
-        if btc_price <= low_f or btc_price >= high_f:
+        if futures_price <= low_f or futures_price >= high_f:
             breach = (pid, bounds, low_f, high_f)
             break
 
     if not breach:
-        return
+        return False
 
     pid, bounds, low_f, high_f = breach
     try:
@@ -651,30 +677,31 @@ def _check_exit_if_price(
             monitoring_legs,
             positions_map=positions_map,
             strategy_name=saved.get("name"),
-            exit_reason="Exit if (BTC band breach)",
+            exit_reason=f"Exit if ({asset} band breach)",
             saved=saved,
         )
         if results:
             clear_locked_exit_if(sid)
             append_log(
                 sid,
-                f"Exit if: BTC ${btc_price:,.0f} outside (${low_f:,.0f}–${high_f:,.0f}) "
+                f"Exit if: {asset} ${futures_price:,.0f} outside (${low_f:,.0f}–${high_f:,.0f}) "
                 f"— squared off {len(results)} leg(s)",
             )
             for r in results:
                 append_log(sid, f"  {r['symbol']}: {r['side']} {r['size']}")
-        else:
-            append_log(
-                sid,
-                f"Exit if breach (BTC ${btc_price:,.0f} vs ${low_f:,.0f}–${high_f:,.0f}) "
-                f"but no open positions found to close",
-            )
+            return True
+        append_log(
+            sid,
+            f"Exit if breach ({asset} ${futures_price:,.0f} vs ${low_f:,.0f}–${high_f:,.0f}) "
+            f"but no open positions found to close",
+        )
     except Exception as e:
         append_log(sid, f"Exit if failed ({bounds.get('symbol', pid)}): {e}")
+    return False
 
 
 def _pnl_monitoring_active(saved: dict[str, Any]) -> bool:
-    """P&L exits only defer to BTC exit-if band when legs use exit-if."""
+    """P&L exits only defer to futures exit-if band when legs use exit-if."""
     locked = saved.get("locked_exit_if") or {}
     if not locked:
         return True
@@ -686,27 +713,27 @@ def _check_trailing_profit_exit(
     delta: DeltaService,
     monitoring_legs: list[dict[str, Any]],
     resolved_legs: list[dict[str, Any]],
-    btc_price: float | None,
+    futures_price: float | None,
     positions_map: dict[int, dict[str, Any]] | None = None,
-) -> None:
+) -> bool:
     sid = saved["id"]
     trails = saved.get("trailing_profits") or []
     if not trails or not monitoring_legs:
-        return
+        return False
 
     if (
-        btc_price is not None
+        futures_price is not None
         and _pnl_monitoring_active(saved)
-        and not _btc_in_exit_if_range(saved, btc_price)
+        and not _futures_in_exit_if_range(saved, futures_price)
     ):
-        return
+        return False
 
     if positions_map is None:
         positions_map = _open_positions_map(delta)
 
     pnl_pct = compute_strategy_cashflow_pnl_pct(saved, monitoring_legs, positions_map)
     if pnl_pct is None or pnl_pct <= 0:
-        return
+        return False
 
     triggered = {float(x) for x in (saved.get("triggered_trailing_profits") or [])}
     pending = [
@@ -715,8 +742,9 @@ def _check_trailing_profit_exit(
         if float(r["profit_pct"]) not in triggered and pnl_pct >= float(r["profit_pct"])
     ]
     if not pending:
-        return
+        return False
 
+    orders_placed = False
     for rule in pending:
         close_size = int(rule["size"])
         profit_level = float(rule["profit_pct"])
@@ -740,6 +768,7 @@ def _check_trailing_profit_exit(
                 )
                 continue
 
+            orders_placed = True
             mark_trailing_profit_triggered(sid, profit_level)
             reduce_entry_legs_size(sid, close_size)
 
@@ -763,41 +792,43 @@ def _check_trailing_profit_exit(
             if not _strategy_has_open_positions(monitoring_legs, positions_map):
                 clear_locked_exit_if(sid)
                 clear_strategy_position_state(sid)
-                return
+                return True
         except Exception as e:
             append_log(sid, f"Trailing profit exit failed ({profit_level:g}%): {e}")
+
+    return orders_placed
 
 
 def _check_pnl_exit(
     saved: dict[str, Any],
     delta: DeltaService,
     monitoring_legs: list[dict[str, Any]],
-    btc_price: float | None,
+    futures_price: float | None,
     positions_map: dict[int, dict[str, Any]] | None = None,
-) -> None:
+) -> bool:
     sid = saved["id"]
     profit_target = _exit_pct(saved, "total_profit_pct")
     loss_limit = _exit_pct(saved, "total_loss_pct")
     if profit_target is None and loss_limit is None:
-        return
+        return False
 
     if (
-        btc_price is not None
+        futures_price is not None
         and _pnl_monitoring_active(saved)
-        and not _btc_in_exit_if_range(saved, btc_price)
+        and not _futures_in_exit_if_range(saved, futures_price)
     ):
-        return
+        return False
 
     if positions_map is None:
         positions_map = _open_positions_map(delta)
 
     pnl_pct = compute_strategy_cashflow_pnl_pct(saved, monitoring_legs, positions_map)
     if pnl_pct is None:
-        return
+        return False
 
     reason = should_exit_on_pnl(pnl_pct, profit_target, loss_limit)
     if not reason:
-        return
+        return False
 
     try:
         results = square_off_all_legs(
@@ -808,6 +839,8 @@ def _check_pnl_exit(
             exit_reason=f"Exit on {reason} (combined P&L {pnl_pct:.2f}%)",
             saved=saved,
         )
+        if not results:
+            return False
         append_log(
             sid,
             f"Exit on {reason} (combined P&L {pnl_pct:.2f}%): squared off {len(results)} leg(s)",
@@ -818,8 +851,10 @@ def _check_pnl_exit(
         for leg in monitoring_legs:
             mark_leg_squared_off(sid, str(leg["product_id"]))
         clear_strategy_position_state(sid)
+        return True
     except Exception as e:
         append_log(sid, f"P&L exit failed ({reason}): {e}")
+    return False
 
 
 def _is_indicator_strategy(saved: dict[str, Any]) -> bool:
@@ -840,7 +875,7 @@ def _indicator_entry_signal(saved: dict[str, Any], delta: DeltaService) -> dict[
     from app.indicators.signals import evaluate_supertrend_entry
 
     try:
-        candles = candles_for_timeframe(delta, str(timeframe), fresh=True)
+        candles = candles_for_timeframe(delta, str(timeframe), asset=_strategy_asset(saved), fresh=True)
         return evaluate_supertrend_entry(
             candles,
             int(length),
@@ -865,7 +900,7 @@ def _indicator_trend_flip_signal(saved: dict[str, Any], delta: DeltaService) -> 
     from app.indicators.signals import evaluate_supertrend_trend_flip
 
     try:
-        candles = candles_for_timeframe(delta, str(timeframe), fresh=True)
+        candles = candles_for_timeframe(delta, str(timeframe), asset=_strategy_asset(saved), fresh=True)
         return evaluate_supertrend_trend_flip(
             candles,
             int(length),
@@ -891,28 +926,28 @@ def _check_indicator_trend_flip_exit(
     delta: DeltaService,
     monitoring_legs: list[dict[str, Any]],
     positions_map: dict[int, dict[str, Any]] | None = None,
-) -> None:
+) -> bool:
     sid = saved["id"]
     if not _is_indicator_strategy(saved) or saved.get("indicator") != "supertrend":
-        return
+        return False
     if not saved.get("entry_legs"):
-        return
+        return False
 
     if positions_map is None:
         positions_map = _open_positions_map(delta)
     if not _strategy_has_open_positions(monitoring_legs, positions_map):
-        return
+        return False
 
     signal = _indicator_trend_flip_signal(saved, delta)
     if not signal:
-        return
+        return False
 
     candle_key = str(int(signal["candle_time"]))
     if saved.get("last_indicator_signal_time") == candle_key:
-        return
+        return False
 
     if not try_claim_indicator_exit(sid, signal["candle_time"]):
-        return
+        return False
 
     try:
         from app.indicators.signals import format_indicator_trend_flip_exit_log
@@ -928,7 +963,7 @@ def _check_indicator_trend_flip_exit(
         )
         if not results:
             release_indicator_exit_claim(sid)
-            return
+            return False
 
         append_log(
             sid,
@@ -940,9 +975,11 @@ def _check_indicator_trend_flip_exit(
         for leg in monitoring_legs:
             mark_leg_squared_off(sid, str(leg["product_id"]))
         clear_strategy_position_state(sid)
+        return True
     except Exception as e:
         release_indicator_exit_claim(sid)
         append_log(sid, f"Trend flip exit failed: {e}")
+    return False
 
 
 def _this_strategy_already_entered_today(
@@ -977,62 +1014,92 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     squared_off_ids = set(saved.get("squared_off_product_ids") or [])
 
     _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
-    saved = get_strategy_by_id(sid) or saved
-    monitoring_legs = _monitoring_legs(saved, resolved_legs)
-
     _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
-    saved = get_strategy_by_id(sid) or saved
     _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
     saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
 
-    btc_price = _get_btc_futures_price(delta)
+    asset = _strategy_asset(saved)
+    futures_price = _get_futures_price(delta, asset)
     # Partial trailing-profit exits first so later full exits use reduced entry_legs size.
-    _check_trailing_profit_exit(saved, delta, monitoring_legs, resolved_legs, btc_price, positions_map)
-    saved = get_strategy_by_id(sid) or saved
-    monitoring_legs = _monitoring_legs(saved, resolved_legs)
-    positions_map = _open_positions_map(delta)
-    _check_indicator_trend_flip_exit(saved, delta, monitoring_legs, positions_map=positions_map)
-    saved = get_strategy_by_id(sid) or saved
-    monitoring_legs = _monitoring_legs(saved, resolved_legs)
-    positions_map = _open_positions_map(delta)
-    _check_exit_if_price(saved, delta, monitoring_legs, positions_map, btc_price=btc_price)
-    saved = get_strategy_by_id(sid) or saved
-    monitoring_legs = _monitoring_legs(saved, resolved_legs)
-    positions_map = _open_positions_map(delta)
-    _check_pnl_exit(saved, delta, monitoring_legs, btc_price, positions_map)
-    saved = get_strategy_by_id(sid) or saved
-    monitoring_legs = _monitoring_legs(saved, resolved_legs)
-    positions_map = _open_positions_map(delta)
+    saved, monitoring_legs, positions_map = _reload_monitoring_state(
+        sid,
+        saved,
+        resolved_legs,
+        positions_map,
+        delta,
+        refresh=_check_trailing_profit_exit(
+            saved, delta, monitoring_legs, resolved_legs, futures_price, positions_map
+        ),
+    )
+    saved, monitoring_legs, positions_map = _reload_monitoring_state(
+        sid,
+        saved,
+        resolved_legs,
+        positions_map,
+        delta,
+        refresh=_check_indicator_trend_flip_exit(saved, delta, monitoring_legs, positions_map),
+    )
+    saved, monitoring_legs, positions_map = _reload_monitoring_state(
+        sid,
+        saved,
+        resolved_legs,
+        positions_map,
+        delta,
+        refresh=_check_exit_if_price(
+            saved, delta, monitoring_legs, positions_map, futures_price=futures_price
+        ),
+    )
+    saved, monitoring_legs, positions_map = _reload_monitoring_state(
+        sid,
+        saved,
+        resolved_legs,
+        positions_map,
+        delta,
+        refresh=_check_pnl_exit(saved, delta, monitoring_legs, futures_price, positions_map),
+    )
 
     if is_at_or_after(end_time):
-        end_time_results: list[dict[str, Any]] = []
-        end_time_expiry: str | None = None
         end_time_pnl_amount, end_time_pnl_pct = _strategy_exit_pnl(saved, monitoring_legs, positions_map)
-        for leg in monitoring_legs:
-            expiry = leg["expiry_date"]
-            pid = str(leg["product_id"])
-            if not is_expiry_calendar_day(expiry):
-                continue
-            if pid in squared_off_ids:
-                continue
+        expiry_legs = [
+            leg
+            for leg in monitoring_legs
+            if is_expiry_calendar_day(leg["expiry_date"])
+            and str(leg["product_id"]) not in squared_off_ids
+        ]
+
+        def _close_expiry_leg(leg: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
             try:
                 result = square_off_leg(delta, leg, positions_map=positions_map)
-                if result:
-                    end_time_results.append(result)
-                    end_time_expiry = expiry
-                    clear_locked_exit_if(sid, pid)
-                    append_log(
-                        sid,
-                        f"Square-off {result['symbol']}: {result['side']} {result['size']} @ end time on expiry {expiry}",
-                    )
-                    mark_leg_squared_off(sid, pid)
-                    squared_off_ids.add(pid)
-                else:
-                    append_log(sid, f"No open position to square off for {leg.get('symbol')} on {expiry}")
-                    mark_leg_squared_off(sid, pid)
-                    squared_off_ids.add(pid)
+                return leg, result, None
             except Exception as e:
-                append_log(sid, f"Square-off failed {leg.get('symbol')}: {e}")
+                return leg, None, str(e)
+
+        close_outcomes = run_parallel(
+            [lambda leg=leg: _close_expiry_leg(leg) for leg in expiry_legs]
+        )
+        end_time_results: list[dict[str, Any]] = []
+        end_time_expiry: str | None = None
+        for leg, result, error in close_outcomes:
+            expiry = leg["expiry_date"]
+            pid = str(leg["product_id"])
+            if error:
+                append_log(sid, f"Square-off failed {leg.get('symbol')}: {error}")
+                continue
+            if result:
+                end_time_results.append(result)
+                end_time_expiry = expiry
+                clear_locked_exit_if(sid, pid)
+                append_log(
+                    sid,
+                    f"Square-off {result['symbol']}: {result['side']} {result['size']} @ end time on expiry {expiry}",
+                )
+                mark_leg_squared_off(sid, pid)
+                squared_off_ids.add(pid)
+            else:
+                append_log(sid, f"No open position to square off for {leg.get('symbol')} on {expiry}")
+                mark_leg_squared_off(sid, pid)
+                squared_off_ids.add(pid)
 
         if end_time_results:
             _notify_strategy_orders(
@@ -1067,12 +1134,12 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
 
         entry_if = bool(saved.get("entry_if_enabled"))
         if entry_if:
-            if btc_price is None:
-                btc_price = _get_btc_futures_price(delta)
-            if btc_price is None:
-                append_log(sid, "Entry if skipped: could not fetch BTC futures price")
+            if futures_price is None:
+                futures_price = _get_futures_price(delta, asset)
+            if futures_price is None:
+                append_log(sid, f"Entry if skipped: could not fetch {asset} futures price")
                 return
-            if not _btc_at_entry_if_trigger(saved, btc_price):
+            if not _futures_at_entry_if_trigger(saved, futures_price):
                 return
         else:
             if is_run_once_entry_complete(saved, entry_days):
@@ -1097,14 +1164,15 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
         resolved_legs = resolve_saved_legs(delta, saved)
 
     params = _strategy_params_from_resolved(leg_configs, resolved_legs)
+    params["asset"] = asset
     params["strategy_name"] = saved.get("name")
     if is_indicators and signal:
         from app.indicators.signals import format_indicator_entry_log
 
         params["entry_reason"] = format_indicator_entry_log(signal)
-    elif not is_indicators and entry_if and btc_price is not None:
+    elif not is_indicators and entry_if and futures_price is not None:
         low_f, high_f = _entry_if_levels(saved)
-        params["entry_reason"] = f"Entry if: {_format_entry_if_trigger(btc_price, low_f, high_f)}"
+        params["entry_reason"] = f"Entry if: {_format_entry_if_trigger(asset, futures_price, low_f, high_f)}"
     elif not is_indicators:
         params["entry_reason"] = f"Scheduled entry at {entry_time}"
     if not params.get("legs"):
@@ -1148,11 +1216,11 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
         from app.indicators.signals import format_indicator_entry_log
 
         append_log(sid, f"{format_indicator_entry_log(signal)} — placed {len(orders)} order(s)")
-    elif not is_indicators and entry_if and btc_price is not None:
+    elif not is_indicators and entry_if and futures_price is not None:
         low_f, high_f = _entry_if_levels(saved)
         append_log(
             sid,
-            f"Entry if: {_format_entry_if_trigger(btc_price, low_f, high_f)} "
+            f"Entry if: {_format_entry_if_trigger(asset, futures_price, low_f, high_f)} "
             f"— placed {len(orders)} order(s)",
         )
     elif not is_indicators:
@@ -1169,5 +1237,4 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     saved = get_strategy_by_id(sid) or saved
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
     _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
-    saved = get_strategy_by_id(sid) or saved
     _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)

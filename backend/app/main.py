@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
         yield
 
 
-app = FastAPI(title="Delta BTC Options Algo", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Delta Algo", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

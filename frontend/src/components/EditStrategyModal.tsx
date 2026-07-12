@@ -18,6 +18,7 @@ import {
 } from './IndicatorEditor';
 import { EntryConditionEditor } from './EntryConditionEditor';
 import { formatAmPmTime, HOURS_12, MINUTES, parseAmPmTime } from '../timeUtils';
+import { CRYPTO_OPTIONS, CryptoAsset, normalizeCryptoAsset } from '../cryptoAssets';
 
 function TimePicker({
   label,
@@ -87,6 +88,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
   const endParsed = parseAmPmTime(strategy.end_time);
 
   const [name, setName] = useState(strategy.name);
+  const [cryptoAsset, setCryptoAsset] = useState<CryptoAsset>(() => normalizeCryptoAsset(strategy.asset));
   const [indicator, setIndicator] = useState<IndicatorType>(indicatorInit.indicator);
   const [supertrendLength, setSupertrendLength] = useState(indicatorInit.supertrendLength);
   const [supertrendFactor, setSupertrendFactor] = useState(indicatorInit.supertrendFactor);
@@ -124,12 +126,12 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
 
   const loadExpirySlots = useCallback(async () => {
     try {
-      const data = await api.getExpirySlots();
+      const data = await api.getExpirySlots(cryptoAsset);
       setActiveExpiries(data.active);
     } catch {
       setActiveExpiries([]);
     }
-  }, []);
+  }, [cryptoAsset]);
 
   useEffect(() => {
     loadExpirySlots();
@@ -163,6 +165,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
         : {};
       await api.updateMyStrategy(strategy.id, {
         name: name.trim(),
+        asset: cryptoAsset,
         strategy_template: isIndicators ? 'indicators' : 'custom',
         ...indicatorFields,
         ...entryIf,
@@ -194,6 +197,18 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
         </div>
         <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
+            <label className="label">Crypto</label>
+            <select
+              className="input"
+              value={cryptoAsset}
+              onChange={(e) => setCryptoAsset(e.target.value as CryptoAsset)}
+            >
+              {CRYPTO_OPTIONS.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label className="label">Strategy Name</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
@@ -204,6 +219,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
                 supertrendLength={supertrendLength}
                 supertrendFactor={supertrendFactor}
                 supertrendTimeframe={supertrendTimeframe}
+                asset={cryptoAsset}
                 onIndicatorChange={setIndicator}
                 onLengthChange={setSupertrendLength}
                 onFactorChange={setSupertrendFactor}
@@ -219,6 +235,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
                 enabled={entryIfEnabled}
                 low={entryIfLow}
                 high={entryIfHigh}
+                asset={cryptoAsset}
                 onEnabledChange={setEntryIfEnabled}
                 onLowChange={setEntryIfLow}
                 onHighChange={setEntryIfHigh}
@@ -246,11 +263,12 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
             onMinute={setEndMinute}
             onAmPm={setEndAmPm}
           />
-          <CustomLegsEditor legs={customLegs} activeExpiries={activeExpiries} onChange={setCustomLegs} />
+          <CustomLegsEditor legs={customLegs} activeExpiries={activeExpiries} asset={cryptoAsset} onChange={setCustomLegs} />
           <TrailingProfitEditor trails={trailingProfits} onChange={setTrailingProfits} />
           <ExitConditionsEditor
             totalProfit={totalProfitPct}
             totalLoss={totalLossPct}
+            asset={cryptoAsset}
             onTotalProfitChange={setTotalProfitPct}
             onTotalLossChange={setTotalLossPct}
           />

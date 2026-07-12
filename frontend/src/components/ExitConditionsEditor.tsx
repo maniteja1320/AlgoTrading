@@ -1,6 +1,9 @@
+import type { CryptoAsset } from '../cryptoAssets';
+
 interface Props {
   totalProfit: string;
   totalLoss: string;
+  asset?: CryptoAsset;
   onTotalProfitChange: (v: string) => void;
   onTotalLossChange: (v: string) => void;
 }
@@ -8,6 +11,7 @@ interface Props {
 export function ExitConditionsEditor({
   totalProfit,
   totalLoss,
+  asset = 'BTC',
   onTotalProfitChange,
   onTotalLossChange,
 }: Props) {
@@ -39,7 +43,7 @@ export function ExitConditionsEditor({
         />
       </div>
       <p className="hint">
-        Combined premium P&L across all legs while BTC futures stays inside the exit-if band. Exits early on total
+        Combined premium P&L across all legs while {asset} futures stays inside the exit-if band. Exits early on total
         profit or total loss; if neither hits, square off at end time on expiry. Outside the band, per-leg exit-if
         applies instead.
       </p>

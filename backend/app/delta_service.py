@@ -5,6 +5,7 @@ from typing import Any, Callable, TypeVar
 from delta_rest_client import DeltaRestClient, OrderType, TimeInForce
 
 from app.api_config_store import load_credentials, save_credentials
+from app.assets import normalize_asset, option_underlying, futures_symbol
 from app.config import settings
 
 T = TypeVar("T")
@@ -75,15 +76,26 @@ class DeltaService:
     def reset_client(self) -> None:
         self._client = None
 
+    def get_futures(self, asset: str = "BTC") -> dict[str, Any]:
+        """Perpetual futures ticker for BTCUSD or ETHUSD on Delta India."""
+        sym = futures_symbol(asset)
+        key = f"futures:{normalize_asset(asset)}"
+        return self._cached(key, _CACHE_TTL_TICKER, lambda: self.client.get_ticker(sym))
+
     def get_btc_futures(self) -> dict[str, Any]:
-        """BTCUSD perpetual futures ticker on Delta India."""
-        return self._cached("btc_futures", _CACHE_TTL_TICKER, lambda: self.client.get_ticker("BTCUSD"))
+        return self.get_futures("BTC")
+
+    def get_spot(self, asset: str = "BTC") -> dict[str, Any]:
+        return self.get_futures(asset)
 
     def get_btc_spot(self) -> dict[str, Any]:
-        return self.get_btc_futures()
+        return self.get_spot("BTC")
 
-    def get_option_expiries(self) -> list[str]:
+    def get_option_expiries(self, asset: str = "BTC") -> list[str]:
         from datetime import datetime
+
+        underlying = option_underlying(asset)
+        cache_key = f"option_expiries:{underlying}"
 
         def fetch() -> list[str]:
             products = self.client.get_products(
@@ -91,18 +103,20 @@ class DeltaService:
             )
             expiries: set[str] = set()
             for p in products:
-                if p.get("underlying_asset", {}).get("symbol") == "BTC" and p.get("settlement_time"):
+                if p.get("underlying_asset", {}).get("symbol") == underlying and p.get("settlement_time"):
                     dt = datetime.fromisoformat(p["settlement_time"].replace("Z", "+00:00"))
                     expiries.add(dt.strftime("%d-%m-%Y"))
             return sorted(expiries, key=lambda x: datetime.strptime(x, "%d-%m-%Y"))
 
-        return self._cached("option_expiries", _CACHE_TTL_EXPIRIES, fetch)
+        return self._cached(cache_key, _CACHE_TTL_EXPIRIES, fetch)
 
-    def get_option_chain(self, expiry_date: str) -> list[dict[str, Any]]:
+    def get_option_chain(self, expiry_date: str, asset: str = "BTC") -> list[dict[str, Any]]:
+        underlying = option_underlying(asset)
+        cache_key = f"option_chain:{underlying}:{expiry_date}"
         return self._cached(
-            f"option_chain:{expiry_date}",
+            cache_key,
             _CACHE_TTL_CHAIN,
-            lambda: self.client.option_chain("BTC", expiry_date),
+            lambda: self.client.option_chain(underlying, expiry_date),
         )
 
     def get_products(self, **query: Any) -> list[dict[str, Any]]:

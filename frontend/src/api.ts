@@ -1,4 +1,17 @@
+import type { CryptoAsset } from './cryptoAssets';
+import {
+  assetFromSymbol,
+  normalizeCryptoAsset,
+  positionPnlPctNumerator,
+  strategyPnlPctNumerator,
+} from './cryptoAssets';
+
 const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+
+function withAsset(path: string, asset: CryptoAsset = 'BTC'): string {
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}asset=${asset}`;
+}
 
 /** True when API calls target a backend (direct URL or same-origin nginx proxy). */
 export function isApiBaseConfigured(): boolean {
@@ -84,13 +97,15 @@ export function positionTotalCashflow(p: Position): number {
   return (parseFloat(p.realized_cashflow || '0') || 0) + (parseFloat(p.unrealized_cashflow || '0') || 0);
 }
 
-/** Return on premium deployed: (cashflow P&L × 100 × 1000) / (entry × lots). */
+/** Return on premium deployed — BTC: (pnl×100×1000)/(entry×lots); ETH: (pnl×100×100)/(entry×lots). */
 export function positionCashflowPnlPct(p: Position): number | null {
   const entry = parseFloat(p.entry_price || '0') || 0;
   const lots = Math.abs(p.size);
   if (entry <= 0 || lots <= 0) return null;
   const pnl = positionTotalCashflow(p);
-  return (pnl * 100 * 1000) / (entry * lots);
+  const symbol = p.product?.symbol;
+  const asset = assetFromSymbol(symbol);
+  return (pnl * positionPnlPctNumerator(asset)) / (entry * lots);
 }
 
 export function formatPositionPnl(p: Position): string {
@@ -135,6 +150,7 @@ export interface SupertrendResult {
 export interface SavedStrategy {
   id: string;
   name: string;
+  asset?: CryptoAsset;
   strategy_template?: 'custom' | 'indicators';
   indicator?: 'none' | 'supertrend';
   supertrend_length?: number | null;
@@ -165,6 +181,7 @@ export interface SavedStrategy {
   last_entry_date?: string | null;
   locked_exit_if?: Record<string, LockedExitIf>;
   combined_entry_premium?: number;
+  entry_strategy_size?: number;
   entry_legs?: Array<{ product_id: number; size?: number }>;
   run_once_any_completed?: boolean;
   run_once_completed_weekdays?: string[];
@@ -209,7 +226,17 @@ function strategyLotSizeForProduct(strategy: SavedStrategy, productId: number): 
   return strategy.size ?? 1;
 }
 
-/** Lot size for P&L % — this strategy's configured/entry size, not the full account position. */
+/** Original entry lot size for P&L % denominator — fixed after partial trail exits. */
+export function strategyPnlDenominatorSize(strategy: SavedStrategy): number {
+  if (strategy.entry_strategy_size != null && strategy.entry_strategy_size > 0) {
+    return strategy.entry_strategy_size;
+  }
+  const configs = strategyLegConfigs(strategy);
+  if (configs.length) return configs[0].size ?? 1;
+  return strategy.size ?? 1;
+}
+
+/** Lot size for close-all and leg share — uses current entry_legs when set. */
 export function strategyEntrySize(strategy: SavedStrategy, _positions?: Position[]): number {
   const entryLegs = strategy.entry_legs;
   if (entryLegs?.length) {
@@ -271,18 +298,20 @@ export function strategyCanCloseAll(strategy: SavedStrategy, positions: Position
   return productIds.some((id) => positions.some((p) => p.product_id === id && p.size !== 0));
 }
 
-/** Live total profit %: (live total P&L × 1000 × 100) / (combined entry premium × size). */
+/** Live total profit % — uses original entry size; BTC/ETH use different numerators. */
 export function strategyTotalCashflowPnlPct(strategy: SavedStrategy, positions: Position[]): number | null {
   const totalPnl = strategyTotalCashflowPnl(strategy, positions);
   const combinedPremium = strategy.combined_entry_premium;
-  const size = strategyEntrySize(strategy, positions);
+  const size = strategyPnlDenominatorSize(strategy);
   if (totalPnl == null || combinedPremium == null || combinedPremium <= 0 || size <= 0) return null;
 
-  return (totalPnl * 1000 * 100) / (combinedPremium * size);
+  const asset = normalizeCryptoAsset(strategy.asset);
+  return (totalPnl * strategyPnlPctNumerator(asset)) / (combinedPremium * size);
 }
 
 export interface SavedStrategyPayload {
   name: string;
+  asset?: CryptoAsset;
   strategy_template?: 'custom' | 'indicators';
   indicator?: 'none' | 'supertrend';
   supertrend_length?: number;
@@ -325,16 +354,22 @@ export const api = {
     }
     throw new Error(`${lastError}. Restart the backend (see restart.ps1) and try again.`);
   },
-  getFutures: () => request<Record<string, string>>('/api/market/futures'),
-  getSupertrend: (params: { length: number; factor: number; timeframe: string }) =>
+  getFutures: (asset: CryptoAsset = 'BTC') =>
+    request<Record<string, string>>(withAsset('/api/market/futures', asset)),
+  getSupertrend: (params: { length: number; factor: number; timeframe: string; asset?: CryptoAsset }) =>
     request<SupertrendResult>(
-      `/api/market/supertrend?length=${params.length}&factor=${params.factor}&timeframe=${encodeURIComponent(params.timeframe)}&_=${Date.now()}`,
+      withAsset(
+        `/api/market/supertrend?length=${params.length}&factor=${params.factor}&timeframe=${encodeURIComponent(params.timeframe)}&_=${Date.now()}`,
+        params.asset ?? 'BTC',
+      ),
     ),
-  getSpot: () => request<Record<string, string>>('/api/market/spot'),
-  getExpiries: () => request<string[]>('/api/market/expiries'),
-  getExpirySlots: () =>
-    request<{ active: string[]; slots: { today?: string; tomorrow?: string } }>('/api/market/expiry-slots'),
-  getCustomPreview: (option_type: string, expiry_slot: string) =>
+  getSpot: (asset: CryptoAsset = 'BTC') => request<Record<string, string>>(withAsset('/api/market/spot', asset)),
+  getExpiries: (asset: CryptoAsset = 'BTC') => request<string[]>(withAsset('/api/market/expiries', asset)),
+  getExpirySlots: (asset: CryptoAsset = 'BTC') =>
+    request<{ active: string[]; slots: { today?: string; tomorrow?: string } }>(
+      withAsset('/api/market/expiry-slots', asset),
+    ),
+  getCustomPreview: (option_type: string, expiry_slot: string, asset: CryptoAsset = 'BTC') =>
     request<{
       symbol: string;
       product_id: number;
@@ -342,9 +377,9 @@ export const api = {
       atm_strike: number;
       mark_price: string;
       underlying_price: number;
-    }>(`/api/market/custom-preview?option_type=${option_type}&expiry_slot=${expiry_slot}&strike_type=ATM`),
-  getOptionChain: (expiry_date: string) =>
-    request<OptionTicker[]>(`/api/market/option-chain?expiry_date=${encodeURIComponent(expiry_date)}`),
+    }>(withAsset(`/api/market/custom-preview?option_type=${option_type}&expiry_slot=${expiry_slot}&strike_type=ATM`, asset)),
+  getOptionChain: (expiry_date: string, asset: CryptoAsset = 'BTC') =>
+    request<OptionTicker[]>(withAsset(`/api/market/option-chain?expiry_date=${encodeURIComponent(expiry_date)}`, asset)),
   getBalances: () => request<unknown[]>('/api/account/balances'),
   getPositions: () => request<Position[]>('/api/account/positions'),
   getOrders: () => request<Order[]>('/api/trading/orders'),

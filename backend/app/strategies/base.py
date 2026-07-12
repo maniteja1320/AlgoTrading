@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from app.assets import normalize_asset
 from app.delta_service import DeltaService
 from app.option_resolver import resolve_custom_option
 from app.order_parallel import place_order_safe, run_parallel
@@ -49,6 +50,9 @@ class BaseStrategy(ABC):
         self.state.log("Strategy stopped")
         return self.state
 
+    def _strategy_asset(self) -> str:
+        return normalize_asset(self.params.get("asset"))
+
 
 class ShortStraddleStrategy(BaseStrategy):
     """Sell ATM call + put when combined premium exceeds threshold."""
@@ -60,13 +64,14 @@ class ShortStraddleStrategy(BaseStrategy):
     def run_once(self, expiry_date: str) -> dict[str, Any]:
         min_premium = float(self.params.get("min_premium", 500))
         size = int(self.params.get("size", 1))
+        asset = self._strategy_asset()
 
-        spot = self.delta.get_btc_spot()
+        spot = self.delta.get_spot(asset)
         spot_price = float(spot.get("mark_price") or spot.get("spot_price") or 0)
         if spot_price <= 0:
-            raise ValueError("Could not fetch BTC spot price")
+            raise ValueError(f"Could not fetch {asset} spot price")
 
-        chain = self.delta.get_option_chain(expiry_date)
+        chain = self.delta.get_option_chain(expiry_date, asset)
         if not chain:
             raise ValueError(f"No options for expiry {expiry_date}")
 
@@ -95,15 +100,32 @@ class ShortStraddleStrategy(BaseStrategy):
 
         orders = []
         if total_premium >= min_premium:
-            for leg, label in [(call, "call"), (put, "put")]:
-                order = self.delta.place_order(
+            strategy_name = self.params.get("strategy_name")
+
+            def _sell_straddle_leg(leg: dict[str, Any], label: str) -> dict[str, Any]:
+                order = place_order_safe(
+                    self.delta,
                     product_id=int(leg["product_id"]),
                     size=size,
                     side="sell",
                     order_type="market_order",
+                    order_alert={
+                        "event": "opened",
+                        "symbol": str(leg.get("symbol") or f"product_{leg['product_id']}"),
+                        "side": "sell",
+                        "size": size,
+                        "strategy_name": strategy_name,
+                    },
                 )
-                orders.append({"leg": label, "order": order})
                 self.state.log(f"Sold {label} {leg.get('symbol')}")
+                return {"leg": label, "order": order}
+
+            orders = run_parallel(
+                [
+                    lambda leg=call, label="call": _sell_straddle_leg(leg, label),
+                    lambda leg=put, label="put": _sell_straddle_leg(leg, label),
+                ]
+            )
         else:
             self.state.log(f"Premium {total_premium:.2f} below threshold {min_premium}")
 
@@ -127,10 +149,11 @@ class IronCondorStrategy(BaseStrategy):
     def run_once(self, expiry_date: str) -> dict[str, Any]:
         wing_width = float(self.params.get("wing_width", 2000))
         size = int(self.params.get("size", 1))
+        asset = self._strategy_asset()
 
-        spot = self.delta.get_btc_spot()
+        spot = self.delta.get_spot(asset)
         spot_price = float(spot.get("mark_price") or spot.get("spot_price") or 0)
-        chain = self.delta.get_option_chain(expiry_date)
+        chain = self.delta.get_option_chain(expiry_date, asset)
 
         calls = [t for t in chain if t.get("contract_type") == "call_options"]
         puts = [t for t in chain if t.get("contract_type") == "put_options"]
@@ -186,6 +209,7 @@ class CustomStrategy(BaseStrategy):
                 option_type=leg_cfg.get("option_type", "call"),
                 strike_type=leg_cfg.get("strike_type", "ATM"),
                 expiry_slot=leg_cfg.get("expiry_slot", "today"),
+                asset=self._strategy_asset(),
             )
             resolved_meta.append(resolved)
             self.state.log(

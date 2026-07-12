@@ -1,14 +1,15 @@
-"""Fetch BTC futures candles for indicators."""
+"""Fetch futures candles for indicators."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.assets import futures_symbol, normalize_asset
 from app.delta_service import DeltaService
 
 IST = ZoneInfo("Asia/Kolkata")
-SYMBOL = "BTCUSD"
+DEFAULT_ASSET = "BTC"
 
 TIMEFRAME_SECONDS = {
     "5m": 300,
@@ -44,11 +45,13 @@ def fetch_candles(
     resolution: str,
     days: int = 6,
     *,
+    asset: str = DEFAULT_ASSET,
     cache_ttl: float | None = 30.0,
 ) -> list[dict[str, float]]:
+    symbol = futures_symbol(asset)
     end = int(datetime.now(IST).timestamp())
     start = int((datetime.now(IST) - timedelta(days=days)).timestamp())
-    raw = delta.get_candles(SYMBOL, resolution, start, end, cache_ttl=cache_ttl)
+    raw = delta.get_candles(symbol, resolution, start, end, cache_ttl=cache_ttl)
     if not isinstance(raw, list):
         return []
     candles: list[dict[str, float]] = []
@@ -66,6 +69,7 @@ def candles_for_timeframe(
     delta: DeltaService,
     timeframe: str,
     *,
+    asset: str = DEFAULT_ASSET,
     fresh: bool = True,
 ) -> list[dict[str, float]]:
     resolution_map = {"5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h"}
@@ -77,7 +81,7 @@ def candles_for_timeframe(
         cache_ttl = TIMEFRAME_CANDLE_CACHE_TTL.get(timeframe, 5.0)
     else:
         cache_ttl = 30.0
-    return fetch_candles(delta, res, days=days, cache_ttl=cache_ttl)
+    return fetch_candles(delta, res, days=days, asset=asset, cache_ttl=cache_ttl)
 
 
 def candle_bar_meta(

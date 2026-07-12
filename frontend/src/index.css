@@ -413,6 +413,16 @@ table.data-table tr.atm-row:hover td {
   text-align: right;
 }
 
+.futures-price-grid {
+  display: flex;
+  gap: 14px;
+}
+
+.futures-updated {
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
 .btc-price-label {
   font-size: 0.65rem;
   color: var(--text-muted);

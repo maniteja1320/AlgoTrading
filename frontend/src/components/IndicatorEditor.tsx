@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, SupertrendResult } from '../api';
+import type { CryptoAsset } from '../cryptoAssets';
 import {
   formatSupertrendBarLabel,
   msUntilNextCandleClose,
@@ -104,9 +105,10 @@ interface StrategySupertrendLiveProps {
   length?: number | null;
   factor?: number | null;
   timeframe?: string | null;
+  asset?: CryptoAsset;
 }
 
-export function StrategySupertrendLive({ length, factor, timeframe }: StrategySupertrendLiveProps) {
+export function StrategySupertrendLive({ length, factor, timeframe, asset = 'BTC' }: StrategySupertrendLiveProps) {
   const [live, setLive] = useState<SupertrendResult | null>(null);
   const boundaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tf = (timeframe as SupertrendTimeframe) || '5m';
@@ -121,12 +123,12 @@ export function StrategySupertrendLive({ length, factor, timeframe }: StrategySu
       return;
     }
     try {
-      const data = await api.getSupertrend({ length, factor, timeframe: tf });
+      const data = await api.getSupertrend({ length, factor, timeframe: tf, asset });
       setLive(data);
     } catch {
       setLive(null);
     }
-  }, [length, factor, tf, timeframe]);
+  }, [length, factor, tf, timeframe, asset]);
 
   useEffect(() => {
     fetchSupertrend();
@@ -170,6 +172,7 @@ interface Props {
   supertrendLength: string;
   supertrendFactor: string;
   supertrendTimeframe: SupertrendTimeframe;
+  asset?: CryptoAsset;
   onIndicatorChange: (indicator: IndicatorType) => void;
   onLengthChange: (v: string) => void;
   onFactorChange: (v: string) => void;
@@ -181,6 +184,7 @@ export function IndicatorEditor({
   supertrendLength,
   supertrendFactor,
   supertrendTimeframe,
+  asset = 'BTC',
   onIndicatorChange,
   onLengthChange,
   onFactorChange,
@@ -204,14 +208,14 @@ export function IndicatorEditor({
       return;
     }
     try {
-      const data = await api.getSupertrend({ length, factor, timeframe: supertrendTimeframe });
+      const data = await api.getSupertrend({ length, factor, timeframe: supertrendTimeframe, asset });
       setLive(data);
       setLiveError(null);
     } catch (e) {
       setLive(null);
       setLiveError(e instanceof Error ? e.message : 'Failed to load Supertrend');
     }
-  }, [indicator, supertrendLength, supertrendFactor, supertrendTimeframe]);
+  }, [indicator, supertrendLength, supertrendFactor, supertrendTimeframe, asset]);
 
   useEffect(() => {
     if (indicator !== 'supertrend') {
@@ -325,7 +329,7 @@ export function IndicatorEditor({
       <p className="hint">
         {indicator === 'none'
           ? 'Select an indicator for entry signals. Legs and exit rules work as in Custom.'
-          : `Supertrend on BTC futures — polls every ${SUPERTREND_POLL_MS[supertrendTimeframe] / 1000}s and refetches candles when each ${supertrendTimeframe} bar closes.`}
+          : `Supertrend on ${asset} futures — polls every ${SUPERTREND_POLL_MS[supertrendTimeframe] / 1000}s and refetches candles when each ${supertrendTimeframe} bar closes.`}
       </p>
     </div>
   );

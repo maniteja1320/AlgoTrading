@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, Bitcoin, Bookmark, RefreshCw, Settings, Zap } from 'lucide-react';
+import { Activity, Bookmark, RefreshCw, Settings, TrendingUp, Zap } from 'lucide-react';
 import { api, AccountConfig, OptionTicker } from './api';
 import { mergeChainPrices, syncSelectedOption } from './chainUtils';
+import { CHAIN_OPTIONS, CryptoAsset, futuresSymbol } from './cryptoAssets';
 import { OptionChain } from './components/OptionChain';
 import { OrderPanel } from './components/OrderPanel';
 import { PositionsTable } from './components/PositionsTable';
@@ -17,16 +18,24 @@ type Tab = 'chain' | 'positions' | 'orders' | 'strategies' | 'my_strategies';
 
 const TABS: { id: Tab; label: string; shortLabel: string; Icon: typeof Activity }[] = [
   { id: 'chain', label: 'Option Chain', shortLabel: 'Chain', Icon: Activity },
-  { id: 'positions', label: 'Positions', shortLabel: 'Positions', Icon: Bitcoin },
+  { id: 'positions', label: 'Positions', shortLabel: 'Positions', Icon: TrendingUp },
   { id: 'orders', label: 'Orders', shortLabel: 'Orders', Icon: RefreshCw },
   { id: 'strategies', label: 'Strategies', shortLabel: 'Algo', Icon: Zap },
   { id: 'my_strategies', label: 'My Strategies', shortLabel: 'Saved', Icon: Bookmark },
 ];
 
+function formatFuturesPrice(value: string): string {
+  return Number.isFinite(Number(value))
+    ? `$${Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+    : value;
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('chain');
   const [config, setConfig] = useState<AccountConfig | null>(null);
-  const [futuresPrice, setFuturesPrice] = useState<string>('—');
+  const [chainAsset, setChainAsset] = useState<CryptoAsset>('BTC');
+  const [btcFuturesPrice, setBtcFuturesPrice] = useState<string>('—');
+  const [ethFuturesPrice, setEthFuturesPrice] = useState<string>('—');
   const [expiries, setExpiries] = useState<string[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState('');
   const [chain, setChain] = useState<OptionTicker[]>([]);
@@ -43,21 +52,26 @@ export default function App() {
 
   const loadMarket = useCallback(async () => {
     try {
-      const [futures, exp] = await Promise.all([api.getFutures(), api.getExpiries()]);
-      setFuturesPrice(futures.mark_price ?? futures.spot_price ?? '—');
+      const [btc, eth, exp] = await Promise.all([
+        api.getFutures('BTC'),
+        api.getFutures('ETH'),
+        api.getExpiries(chainAsset),
+      ]);
+      setBtcFuturesPrice(btc.mark_price ?? btc.spot_price ?? '—');
+      setEthFuturesPrice(eth.mark_price ?? eth.spot_price ?? '—');
       setExpiries(exp);
-      setSelectedExpiry((current) => current || exp[0] || '');
+      setSelectedExpiry((current) => (current && exp.includes(current) ? current : exp[0] || ''));
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load market data');
     }
-  }, []);
+  }, [chainAsset]);
 
   const loadChain = useCallback(async (silent = false) => {
     if (!selectedExpiry) return;
     if (!silent) setLoading(true);
     try {
-      const data = await api.getOptionChain(selectedExpiry);
+      const data = await api.getOptionChain(selectedExpiry, chainAsset);
       if (silent) {
         setChain((prev) => mergeChainPrices(prev, data));
         setSelectedOption((sel) => syncSelectedOption(sel, data));
@@ -71,7 +85,7 @@ export default function App() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [selectedExpiry]);
+  }, [selectedExpiry, chainAsset]);
 
   const refreshChainPrices = useCallback(() => loadChain(true), [loadChain]);
 
@@ -104,38 +118,43 @@ export default function App() {
 
   useEffect(() => {
     if (selectedExpiry) loadChain(false);
-  }, [selectedExpiry, loadChain]);
+  }, [selectedExpiry, chainAsset, loadChain]);
 
   useEffect(() => {
     const id = setInterval(refreshAll, REFRESH_MS);
     return () => clearInterval(id);
   }, [refreshAll]);
 
-  const priceDisplay = Number.isFinite(Number(futuresPrice))
-    ? `$${Number(futuresPrice).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-    : futuresPrice;
+  const chainUnderlyingPrice =
+    chainAsset === 'ETH' ? Number(ethFuturesPrice) || 0 : Number(btcFuturesPrice) || 0;
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="app-header-brand">
-          <Bitcoin size={26} color="#f7931a" className="app-logo" />
+          <TrendingUp size={26} color="var(--accent)" className="app-logo" />
           <div>
-            <h1 className="app-title">Delta BTC Algo</h1>
+            <h1 className="app-title">Delta Algo</h1>
             <p className="app-subtitle">Delta Exchange India</p>
           </div>
         </div>
 
         <div className="app-header-actions">
-          <div className="btc-price-card">
-            <div className="btc-price-label">BTCUSD</div>
-            <div className="btc-price-value mono">{priceDisplay}</div>
-            {lastUpdated && (
-              <div className="btc-price-updated">
-                {lastUpdated.toLocaleTimeString()}
-              </div>
-            )}
+          <div className="futures-price-grid">
+            <div className="btc-price-card">
+              <div className="btc-price-label">{futuresSymbol('BTC')}</div>
+              <div className="btc-price-value mono">{formatFuturesPrice(btcFuturesPrice)}</div>
+            </div>
+            <div className="btc-price-card">
+              <div className="btc-price-label">{futuresSymbol('ETH')}</div>
+              <div className="btc-price-value mono">{formatFuturesPrice(ethFuturesPrice)}</div>
+            </div>
           </div>
+          {lastUpdated && (
+            <div className="btc-price-updated futures-updated">
+              {lastUpdated.toLocaleTimeString()}
+            </div>
+          )}
 
           {config && (
             <span
@@ -186,7 +205,15 @@ export default function App() {
           <div className="grid-2">
             <div className="panel">
               <div className="panel-header">
-                <span>BTC Option Chain</span>
+                <select
+                  className="input panel-select"
+                  value={chainAsset}
+                  onChange={(e) => setChainAsset(e.target.value as CryptoAsset)}
+                >
+                  {CHAIN_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{opt.label}</option>
+                  ))}
+                </select>
                 <select
                   className="input panel-select"
                   value={selectedExpiry}
@@ -201,7 +228,7 @@ export default function App() {
                 chain={chain}
                 loading={loading}
                 selected={selectedOption}
-                underlyingPrice={Number(futuresPrice) || 0}
+                underlyingPrice={chainUnderlyingPrice}
                 onSelect={setSelectedOption}
               />
             </div>
@@ -233,6 +260,7 @@ export default function App() {
           <StrategyPanel
             expiry={selectedExpiry}
             expiries={expiries}
+            chainAsset={chainAsset}
             onRefresh={refreshAll}
             onSaved={() => setMyStrategiesKey((k) => k + 1)}
           />
@@ -271,4 +299,3 @@ export default function App() {
     </div>
   );
 }
-

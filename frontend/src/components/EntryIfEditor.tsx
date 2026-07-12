@@ -1,7 +1,10 @@
+import type { CryptoAsset } from '../cryptoAssets';
+
 interface Props {
   enabled: boolean;
   low: string;
   high: string;
+  asset?: CryptoAsset;
   onEnabledChange: (enabled: boolean) => void;
   onLowChange: (low: string) => void;
   onHighChange: (high: string) => void;
@@ -11,6 +14,7 @@ export function EntryIfEditor({
   enabled,
   low,
   high,
+  asset = 'BTC',
   onEnabledChange,
   onLowChange,
   onHighChange,
@@ -19,7 +23,7 @@ export function EntryIfEditor({
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <label className="label" style={{ marginBottom: 0 }}>
-          Entry if (BTC futures)
+          Entry if ({asset} futures)
         </label>
         <button
           type="button"

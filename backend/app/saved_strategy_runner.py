@@ -37,14 +37,15 @@ def _poll_interval_seconds() -> float:
     today = today_ist_str()
 
     for saved in running:
+        # Open positions or locked exit bands need fast exit detection.
+        if saved.get("entry_legs") or saved.get("locked_exit_if"):
+            return 1.0
+
         if saved.get("strategy_template") == "indicators" and saved.get("indicator") == "supertrend":
             return _indicator_poll_interval_seconds(saved)
 
         if saved.get("entry_if_enabled") and saved.get("last_entry_date") != today:
-            return 3.0
-
-        if saved.get("entry_legs") or saved.get("locked_exit_if"):
-            return 5.0
+            return 2.0
 
         entry_days = saved.get("entry_days") or []
         entry_time = saved.get("entry_time", "09:30 AM")

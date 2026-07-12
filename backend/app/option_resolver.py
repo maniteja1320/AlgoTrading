@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.assets import normalize_asset
 from app.delta_service import DeltaService
 from app.expiry_utils import resolve_expiry_slot
 
@@ -41,36 +42,40 @@ def resolve_custom_option(
     option_type: str,
     strike_type: str,
     expiry_slot: str,
+    asset: str = "BTC",
 ) -> dict[str, Any]:
     """Resolve call/put + ATM + today/tomorrow to a tradable option symbol."""
     if strike_type != "ATM":
         raise ValueError(f"Unsupported strike type: {strike_type}")
 
-    all_expiries = delta.get_option_expiries()
+    sym = normalize_asset(asset)
+    all_expiries = delta.get_option_expiries(sym)
     expiry_date = resolve_expiry_slot(expiry_slot, all_expiries)
 
-    futures = delta.get_btc_futures()
+    futures = delta.get_futures(sym)
     underlying = float(futures.get("mark_price") or futures.get("spot_price") or 0)
     if underlying <= 0:
-        raise ValueError("Could not fetch BTC futures price")
+        raise ValueError(f"Could not fetch {sym} futures price")
 
-    chain = delta.get_option_chain(expiry_date)
+    chain = delta.get_option_chain(expiry_date, sym)
     return _resolve_atm_leg(chain, option_type, expiry_date, expiry_slot, underlying)
 
 
 def resolve_custom_options_batch(
     delta: DeltaService,
     leg_configs: list[dict[str, Any]],
+    asset: str = "BTC",
 ) -> list[dict[str, Any]]:
     """Resolve multiple legs with shared expiries/futures/chain fetches."""
     if not leg_configs:
         return []
 
-    all_expiries = delta.get_option_expiries()
-    futures = delta.get_btc_futures()
+    sym = normalize_asset(asset)
+    all_expiries = delta.get_option_expiries(sym)
+    futures = delta.get_futures(sym)
     underlying = float(futures.get("mark_price") or futures.get("spot_price") or 0)
     if underlying <= 0:
-        raise ValueError("Could not fetch BTC futures price")
+        raise ValueError(f"Could not fetch {sym} futures price")
 
     chains: dict[str, list[dict[str, Any]]] = {}
     resolved: list[dict[str, Any]] = []
@@ -83,7 +88,7 @@ def resolve_custom_options_batch(
         expiry_slot = leg_cfg.get("expiry_slot", "today")
         expiry_date = resolve_expiry_slot(expiry_slot, all_expiries)
         if expiry_date not in chains:
-            chains[expiry_date] = delta.get_option_chain(expiry_date)
+            chains[expiry_date] = delta.get_option_chain(expiry_date, sym)
 
         r = _resolve_atm_leg(
             chains[expiry_date],

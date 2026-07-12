@@ -1,9 +1,14 @@
-EXIT_IF_BUFFER = 200
+from app.assets import exit_if_buffer, normalize_asset
 
 
-def compute_exit_if_bounds(atm_strike: float, combined_premium: float) -> tuple[float, float]:
-    low = round(atm_strike - combined_premium + EXIT_IF_BUFFER)
-    high = round(atm_strike + combined_premium - EXIT_IF_BUFFER)
+def compute_exit_if_bounds(
+    atm_strike: float,
+    combined_premium: float,
+    asset: str = "BTC",
+) -> tuple[float, float]:
+    buffer = exit_if_buffer(asset)
+    low = round(atm_strike - combined_premium + buffer)
+    high = round(atm_strike + combined_premium - buffer)
     return low, high
 
 
