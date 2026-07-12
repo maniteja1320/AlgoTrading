@@ -6,6 +6,17 @@ import { formatEntryDays } from './EntryDaysPicker';
 import { expirySlotLabel } from '../expiryUtils';
 import { formatEntryCondition, StrategySupertrendLive } from './IndicatorEditor';
 import { formatExitConditions } from './ExitConditionsEditor';
+import { formatTrailingProfits } from './TrailingProfitEditor';
+
+function formatStrategyExitSummary(s: SavedStrategy): string {
+  const trail = formatTrailingProfits(s.trailing_profits);
+  const pnl = formatExitConditions(s.total_profit_pct, s.total_loss_pct);
+  const parts = [trail, pnl].filter(Boolean);
+  if (s.strategy_template === 'indicators' && s.indicator === 'supertrend') {
+    return `trend flip (${s.supertrend_timeframe}), ${parts.join(', ') || '—'}, exit if, close all, end time on expiry`;
+  }
+  return parts.join(', ') || '—';
+}
 
 function getStrategyLegs(s: SavedStrategy): StrategyLegConfig[] {
   if (s.legs?.length) return s.legs;
@@ -286,10 +297,7 @@ export function MyStrategiesPanel({ refreshKey = 0, positions, onRefresh }: Prop
                       · Square-off: {s.end_time} IST
                     </div>
                     <div>
-                      Exit:{' '}
-                      {s.strategy_template === 'indicators' && s.indicator === 'supertrend'
-                        ? `trend flip (${s.supertrend_timeframe}), ${formatExitConditions(s.total_profit_pct, s.total_loss_pct)}, exit if, close all, end time on expiry`
-                        : formatExitConditions(s.total_profit_pct, s.total_loss_pct)}
+                      Exit: {formatStrategyExitSummary(s)}
                     </div>
                     {running && s.combined_entry_premium == null && s.last_entry_date && (
                       <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>

@@ -50,6 +50,11 @@ class StrategyLeg(BaseModel):
     exit_if_enabled: bool = False
 
 
+class TrailingProfitRule(BaseModel):
+    profit_pct: float = Field(..., gt=0, description="Exit partial size when combined P&L reaches this %")
+    size: int = Field(..., gt=0, description="Lots to exit on each leg at this profit level")
+
+
 class SavedStrategyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     strategy_template: str = Field(default="custom", pattern="^(custom|indicators)$")
@@ -67,6 +72,24 @@ class SavedStrategyCreate(BaseModel):
     entry_if_high: float | None = Field(default=None, gt=0)
     total_profit_pct: float | None = Field(default=None, gt=0, description="Exit when combined profit reaches this %")
     total_loss_pct: float | None = Field(default=None, gt=0, description="Exit when combined loss reaches this %")
+    trailing_profits: list[TrailingProfitRule] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_trailing_profits(self) -> "SavedStrategyCreate":
+        seen: set[float] = set()
+        for rule in self.trailing_profits:
+            key = float(rule.profit_pct)
+            if key in seen:
+                raise ValueError("Trailing profit levels must be unique")
+            seen.add(key)
+        if self.trailing_profits and self.legs:
+            min_leg = min(leg.size for leg in self.legs)
+            total_trail = sum(rule.size for rule in self.trailing_profits)
+            if total_trail > min_leg:
+                raise ValueError(
+                    "Trailing profit total size cannot exceed the smallest leg size"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_entry_mode(self) -> "SavedStrategyCreate":

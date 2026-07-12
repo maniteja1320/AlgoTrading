@@ -6,6 +6,8 @@ import type { CustomLeg } from './CustomLegsEditor';
 import { EntryDaysPicker, entryDaysForSave, hasValidEntryDays, normalizeEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
+import { TrailingProfitEditor, trailsFromSaved, trailsToPayload } from './TrailingProfitEditor';
+import type { TrailingProfit } from './TrailingProfitEditor';
 import {
   IndicatorEditor,
   indicatorPayload,
@@ -106,6 +108,9 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
   const [totalLossPct, setTotalLossPct] = useState(
     strategy.total_loss_pct != null ? String(strategy.total_loss_pct) : '',
   );
+  const [trailingProfits, setTrailingProfits] = useState<TrailingProfit[]>(() =>
+    trailsFromSaved(strategy.trailing_profits),
+  );
   const [entryIfEnabled, setEntryIfEnabled] = useState(strategy.entry_if_enabled ?? false);
   const [entryIfLow, setEntryIfLow] = useState(
     strategy.entry_if_low != null ? String(strategy.entry_if_low) : '',
@@ -144,6 +149,8 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
     try {
       const total_profit_pct = parseOptionalPct(totalProfitPct, 'Total profit');
       const total_loss_pct = parseOptionalPct(totalLossPct, 'Total loss');
+      const filledTrails = trailingProfits.filter((t) => t.profit_pct.trim() || t.size.trim());
+      const trailing_profits = filledTrails.length ? trailsToPayload(filledTrails) : [];
       const entryIf = isIndicators ? {} : parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh);
       const indicatorFields = isIndicators
         ? indicatorPayload({
@@ -163,6 +170,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),
+        trailing_profits,
         ...(total_profit_pct != null ? { total_profit_pct } : {}),
         ...(total_loss_pct != null ? { total_loss_pct } : {}),
       });
@@ -239,6 +247,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
             onAmPm={setEndAmPm}
           />
           <CustomLegsEditor legs={customLegs} activeExpiries={activeExpiries} onChange={setCustomLegs} />
+          <TrailingProfitEditor trails={trailingProfits} onChange={setTrailingProfits} />
           <ExitConditionsEditor
             totalProfit={totalProfitPct}
             totalLoss={totalLossPct}

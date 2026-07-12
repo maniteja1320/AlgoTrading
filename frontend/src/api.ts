@@ -146,6 +146,7 @@ export interface SavedStrategy {
   end_time: string;
   total_profit_pct?: number | null;
   total_loss_pct?: number | null;
+  trailing_profits?: Array<{ profit_pct: number; size: number }>;
   entry_if_enabled?: boolean;
   entry_if_low?: number | null;
   entry_if_high?: number | null;
@@ -297,6 +298,7 @@ export interface SavedStrategyPayload {
   entry_if_high?: number | null;
   total_profit_pct?: number;
   total_loss_pct?: number;
+  trailing_profits?: Array<{ profit_pct: number; size: number }>;
 }
 
 export const api = {

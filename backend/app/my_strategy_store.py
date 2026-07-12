@@ -104,6 +104,7 @@ def update_strategy(strategy_id: str, payload: dict[str, Any]) -> dict[str, Any]
                 "locked_exit_if",
                 "combined_entry_premium",
                 "entry_legs",
+                "triggered_trailing_profits",
                 "run_once_any_completed",
                 "run_once_completed_weekdays",
                 "run_once_scheduled_date",
@@ -139,6 +140,7 @@ def activate_strategy(strategy_id: str) -> dict[str, Any] | None:
             s["locked_exit_if"] = {}
             s.pop("combined_entry_premium", None)
             s.pop("entry_legs", None)
+            s.pop("triggered_trailing_profits", None)
             s.pop("run_once_any_completed", None)
             s.pop("run_once_completed_weekdays", None)
             s.pop("run_once_scheduled_date", None)
@@ -387,7 +389,36 @@ def clear_strategy_position_state(strategy_id: str) -> None:
         if s.get("id") == strategy_id:
             s.pop("entry_legs", None)
             s.pop("combined_entry_premium", None)
+            s.pop("triggered_trailing_profits", None)
             s["locked_exit_if"] = {}
+            break
+    _write(data)
+
+
+def reduce_entry_legs_size(strategy_id: str, amount: int) -> None:
+    """Reduce each entry leg's tracked size after a partial trailing-profit exit."""
+    if amount <= 0:
+        return
+    data = _read()
+    for s in data.get("strategies", []):
+        if s.get("id") != strategy_id:
+            continue
+        legs = s.get("entry_legs") or []
+        s["entry_legs"] = [
+            {**leg, "size": max(0, int(leg.get("size") or 1) - amount)} for leg in legs
+        ]
+        break
+    _write(data)
+
+
+def mark_trailing_profit_triggered(strategy_id: str, profit_pct: float) -> None:
+    data = _read()
+    key = float(profit_pct)
+    for s in data.get("strategies", []):
+        if s.get("id") == strategy_id:
+            triggered = s.setdefault("triggered_trailing_profits", [])
+            if key not in triggered:
+                triggered.append(key)
             break
     _write(data)
 

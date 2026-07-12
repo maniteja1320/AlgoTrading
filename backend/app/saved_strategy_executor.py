@@ -10,6 +10,8 @@ from app.my_strategy_store import (
     get_strategy_by_id,
     mark_leg_squared_off,
     mark_run_once_entry_done,
+    mark_trailing_profit_triggered,
+    reduce_entry_legs_size,
     release_entry_claim,
     release_indicator_entry_claim,
     release_indicator_exit_claim,
@@ -185,6 +187,8 @@ def square_off_leg(
     delta: DeltaService,
     leg: dict[str, Any],
     positions_map: dict[int, dict[str, Any]] | None = None,
+    *,
+    close_size: int | None = None,
 ) -> dict[str, Any] | None:
     product_id = int(leg["product_id"])
     open_pos = _open_position(delta, product_id, symbol=leg.get("symbol"), positions_map=positions_map)
@@ -193,7 +197,8 @@ def square_off_leg(
 
     account_lots = abs(int(open_pos["size"]))
     strategy_lots = int(leg.get("size") or account_lots)
-    size = min(strategy_lots, account_lots)
+    target = close_size if close_size is not None else strategy_lots
+    size = min(target, strategy_lots, account_lots)
     if size <= 0:
         return None
 
@@ -207,7 +212,7 @@ def square_off_leg(
         order_type="market_order",
         reduce_only="true",
     )
-    return {"symbol": symbol, "side": close_side, "size": size, "order": order}
+    return {"symbol": symbol, "product_id": product_id, "side": close_side, "size": size, "order": order}
 
 
 def close_strategy_positions(delta: DeltaService, strategy_id: str) -> list[dict[str, Any]]:
@@ -303,6 +308,43 @@ def square_off_all_legs(
     tasks = [
         lambda leg=leg: square_off_leg(delta, leg, positions_map=positions_map)
         for leg in resolved_legs
+    ]
+    results = [r for r in run_parallel(tasks) if r]
+    if results:
+        delta.invalidate_market_cache()
+        if strategy_name and exit_reason:
+            _notify_strategy_orders(
+                event="closed",
+                strategy_name=strategy_name,
+                reason=exit_reason,
+                legs=[{"symbol": r["symbol"], "side": r["side"], "size": r["size"]} for r in results],
+                pnl_amount=pnl_amount,
+                pnl_pct=pnl_pct,
+            )
+    return results
+
+
+def square_off_partial_lots(
+    delta: DeltaService,
+    resolved_legs: list[dict[str, Any]],
+    close_size: int,
+    positions_map: dict[int, dict[str, Any]] | None = None,
+    *,
+    strategy_name: str | None = None,
+    exit_reason: str | None = None,
+    saved: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not resolved_legs or close_size <= 0:
+        return []
+    active_legs = [leg for leg in resolved_legs if int(leg.get("size") or 0) > 0]
+    if not active_legs:
+        return []
+    pnl_amount, pnl_pct = _strategy_exit_pnl(saved, active_legs, positions_map)
+    tasks = [
+        lambda leg=leg: square_off_leg(
+            delta, leg, positions_map=positions_map, close_size=close_size
+        )
+        for leg in active_legs
     ]
     results = [r for r in run_parallel(tasks) if r]
     if results:
@@ -639,6 +681,93 @@ def _pnl_monitoring_active(saved: dict[str, Any]) -> bool:
     return any(cfg.get("exit_if_enabled") for cfg in _leg_configs(saved))
 
 
+def _check_trailing_profit_exit(
+    saved: dict[str, Any],
+    delta: DeltaService,
+    monitoring_legs: list[dict[str, Any]],
+    resolved_legs: list[dict[str, Any]],
+    btc_price: float | None,
+    positions_map: dict[int, dict[str, Any]] | None = None,
+) -> None:
+    sid = saved["id"]
+    trails = saved.get("trailing_profits") or []
+    if not trails or not monitoring_legs:
+        return
+
+    if (
+        btc_price is not None
+        and _pnl_monitoring_active(saved)
+        and not _btc_in_exit_if_range(saved, btc_price)
+    ):
+        return
+
+    if positions_map is None:
+        positions_map = _open_positions_map(delta)
+
+    pnl_pct = compute_strategy_cashflow_pnl_pct(saved, monitoring_legs, positions_map)
+    if pnl_pct is None or pnl_pct <= 0:
+        return
+
+    triggered = {float(x) for x in (saved.get("triggered_trailing_profits") or [])}
+    pending = [
+        r
+        for r in sorted(trails, key=lambda r: float(r["profit_pct"]))
+        if float(r["profit_pct"]) not in triggered and pnl_pct >= float(r["profit_pct"])
+    ]
+    if not pending:
+        return
+
+    for rule in pending:
+        close_size = int(rule["size"])
+        profit_level = float(rule["profit_pct"])
+        try:
+            results = square_off_partial_lots(
+                delta,
+                monitoring_legs,
+                close_size,
+                positions_map=positions_map,
+                strategy_name=saved.get("name"),
+                exit_reason=(
+                    f"Trailing profit at {profit_level:g}% "
+                    f"(combined P&L {pnl_pct:.2f}%)"
+                ),
+                saved=saved,
+            )
+            if not results:
+                append_log(
+                    sid,
+                    f"Trailing profit at {profit_level:g}%: no open positions to close",
+                )
+                continue
+
+            mark_trailing_profit_triggered(sid, profit_level)
+            reduce_entry_legs_size(sid, close_size)
+
+            append_log(
+                sid,
+                f"Trailing profit at {profit_level:g}% (combined P&L {pnl_pct:.2f}%): "
+                f"closed {close_size} lot(s) on {len(results)} leg(s)",
+            )
+            for r in results:
+                append_log(sid, f"  {r['symbol']}: {r['side']} {r['size']}")
+
+            saved = get_strategy_by_id(sid) or saved
+            monitoring_legs = _monitoring_legs(saved, resolved_legs)
+            positions_map = _open_positions_map(delta)
+
+            for leg in saved.get("entry_legs") or []:
+                pid = str(leg["product_id"])
+                if int(leg.get("size") or 0) <= 0 or not positions_map.get(int(leg["product_id"])):
+                    mark_leg_squared_off(sid, pid)
+
+            if not _strategy_has_open_positions(monitoring_legs, positions_map):
+                clear_locked_exit_if(sid)
+                clear_strategy_position_state(sid)
+                return
+        except Exception as e:
+            append_log(sid, f"Trailing profit exit failed ({profit_level:g}%): {e}")
+
+
 def _check_pnl_exit(
     saved: dict[str, Any],
     delta: DeltaService,
@@ -857,13 +986,23 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     saved = get_strategy_by_id(sid) or saved
 
     btc_price = _get_btc_futures_price(delta)
+    # Partial trailing-profit exits first so later full exits use reduced entry_legs size.
+    _check_trailing_profit_exit(saved, delta, monitoring_legs, resolved_legs, btc_price, positions_map)
+    saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
+    positions_map = _open_positions_map(delta)
     _check_indicator_trend_flip_exit(saved, delta, monitoring_legs, positions_map=positions_map)
     saved = get_strategy_by_id(sid) or saved
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
     positions_map = _open_positions_map(delta)
     _check_exit_if_price(saved, delta, monitoring_legs, positions_map, btc_price=btc_price)
     saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
+    positions_map = _open_positions_map(delta)
     _check_pnl_exit(saved, delta, monitoring_legs, btc_price, positions_map)
+    saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
+    positions_map = _open_positions_map(delta)
 
     if is_at_or_after(end_time):
         end_time_results: list[dict[str, Any]] = []

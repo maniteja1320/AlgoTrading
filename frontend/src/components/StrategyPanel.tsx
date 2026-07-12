@@ -6,6 +6,8 @@ import type { CustomLeg } from './CustomLegsEditor';
 import { DEFAULT_ENTRY_DAYS, EntryDaysPicker, entryDaysForSave, hasValidEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
 import { ExitConditionsEditor, parseOptionalPct } from './ExitConditionsEditor';
+import { TrailingProfitEditor, trailsToPayload } from './TrailingProfitEditor';
+import type { TrailingProfit } from './TrailingProfitEditor';
 import {
   DEFAULT_INDICATOR_STATE,
   IndicatorEditor,
@@ -123,6 +125,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
   ]);
   const [totalProfitPct, setTotalProfitPct] = useState('');
   const [totalLossPct, setTotalLossPct] = useState('');
+  const [trailingProfits, setTrailingProfits] = useState<TrailingProfit[]>([]);
   const [entryIfEnabled, setEntryIfEnabled] = useState(false);
   const [entryIfLow, setEntryIfLow] = useState('');
   const [entryIfHigh, setEntryIfHigh] = useState('');
@@ -193,6 +196,8 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
     try {
       const total_profit_pct = parseOptionalPct(totalProfitPct, 'Total profit');
       const total_loss_pct = parseOptionalPct(totalLossPct, 'Total loss');
+      const filledTrails = trailingProfits.filter((t) => t.profit_pct.trim() || t.size.trim());
+      const trailing_profits = filledTrails.length ? trailsToPayload(filledTrails) : [];
       const entryIf = template === 'custom' ? parseEntryIfBounds(entryIfEnabled, entryIfLow, entryIfHigh) : {};
       const indicatorFields =
         template === 'indicators'
@@ -213,6 +218,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
         legs: legsToPayload(customLegs),
+        trailing_profits,
         ...(total_profit_pct != null ? { total_profit_pct } : {}),
         ...(total_loss_pct != null ? { total_loss_pct } : {}),
       });
@@ -374,6 +380,7 @@ export function StrategyPanel({ expiry, expiries, onRefresh, onSaved }: Props) {
                 onAmPm={setEndAmPm}
               />
               <CustomLegsEditor legs={customLegs} activeExpiries={expirySlots} onChange={setCustomLegs} />
+              <TrailingProfitEditor trails={trailingProfits} onChange={setTrailingProfits} />
               <ExitConditionsEditor
                 totalProfit={totalProfitPct}
                 totalLoss={totalLossPct}
