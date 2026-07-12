@@ -67,9 +67,7 @@ def get_notifications_status():
     }
 
 
-@router.post("/test-email")
-def send_notifications_test_email():
-    """Send one test email using backend SMTP settings (Railway troubleshooting)."""
+def _run_test_email():
     if not email_alerts_enabled():
         raise HTTPException(status_code=503, detail="SMTP is not fully configured on backend")
     try:
@@ -77,6 +75,13 @@ def send_notifications_test_email():
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"SMTP send failed: {exc}") from exc
     return {"status": "sent", "to": settings.alert_email_to.strip()}
+
+
+@router.get("/test-email")
+@router.post("/test-email")
+def send_notifications_test_email():
+    """Send one test email using backend SMTP settings (GET for browser, POST for scripts)."""
+    return _run_test_email()
 
 
 @router.post("/subscribe")
