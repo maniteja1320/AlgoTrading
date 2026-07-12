@@ -55,6 +55,13 @@ def notify_order_email(
 ) -> None:
     try:
         if not email_alerts_enabled():
+            logger.warning(
+                "Order email skipped — SMTP not fully configured (host=%s user=%s password=%s to=%s)",
+                bool(settings.smtp_host.strip()),
+                bool(settings.smtp_user.strip()),
+                bool(settings.smtp_password.strip()),
+                bool(settings.alert_email_to.strip()),
+            )
             return
 
         def _send() -> None:

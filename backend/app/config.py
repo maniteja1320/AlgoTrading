@@ -1,4 +1,12 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _strip_env_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1].strip()
+    return value
 
 
 class Settings(BaseSettings):
@@ -16,6 +24,22 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_claims_email: str = "mailto:admin@example.com"
+
+    @field_validator(
+        "smtp_host",
+        "smtp_user",
+        "smtp_password",
+        "alert_email_to",
+        "vapid_public_key",
+        "vapid_private_key",
+        "vapid_claims_email",
+        mode="before",
+    )
+    @classmethod
+    def strip_wrapping_quotes(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _strip_env_quotes(value)
+        return value
 
     @property
     def vapid_private_key_pem(self) -> str:
