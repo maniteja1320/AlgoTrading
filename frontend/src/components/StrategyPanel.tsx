@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Play, Save, Square, Zap } from 'lucide-react';
 import { api } from '../api';
-import { createLeg, CustomLegsEditor, legsToPayload } from './CustomLegsEditor';
+import { createLeg, CustomLegsEditor, fetchLegPreviews, legsToPayload } from './CustomLegsEditor';
 import type { CustomLeg } from './CustomLegsEditor';
 import { DEFAULT_ENTRY_DAYS, EntryDaysPicker, entryDaysForSave, hasValidEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
@@ -212,6 +212,7 @@ export function StrategyPanel({ expiry, expiries, chainAsset, onRefresh, onSaved
               entryCondition,
             })
           : {};
+      const legPreviews = await fetchLegPreviews(customLegs, cryptoAsset);
       await api.saveMyStrategy({
         name: strategyName.trim(),
         asset: cryptoAsset,
@@ -221,7 +222,7 @@ export function StrategyPanel({ expiry, expiries, chainAsset, onRefresh, onSaved
         entry_days: template === 'custom' && !entryIfEnabled ? entryDaysForSave(entryDays) : [],
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
-        legs: legsToPayload(customLegs),
+        legs: legsToPayload(customLegs, legPreviews, cryptoAsset),
         trailing_profits,
         ...(total_profit_pct != null ? { total_profit_pct } : {}),
         ...(total_loss_pct != null ? { total_loss_pct } : {}),

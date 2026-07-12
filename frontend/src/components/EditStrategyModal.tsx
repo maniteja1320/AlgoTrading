@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { api, SavedStrategy, StrategyLegConfig } from '../api';
-import { createLeg, CustomLegsEditor, legsToPayload } from './CustomLegsEditor';
+import { createLeg, CustomLegsEditor, fetchLegPreviews, legsToPayload } from './CustomLegsEditor';
 import type { CustomLeg } from './CustomLegsEditor';
 import { EntryDaysPicker, entryDaysForSave, hasValidEntryDays, normalizeEntryDays } from './EntryDaysPicker';
 import { EntryIfEditor, parseEntryIfBounds } from './EntryIfEditor';
@@ -61,8 +61,10 @@ function TimePicker({
 }
 
 function legsFromSaved(legs: StrategyLegConfig[]): CustomLeg[] {
-  return legs.map((leg) =>
-    createLeg({
+  return legs.map((leg) => {
+    const hasLow = Object.prototype.hasOwnProperty.call(leg, 'exit_if_low');
+    const hasHigh = Object.prototype.hasOwnProperty.call(leg, 'exit_if_high');
+    return createLeg({
       option_type: leg.option_type as 'call' | 'put',
       expiry_slot: leg.expiry_slot,
       side: leg.side as 'buy' | 'sell',
@@ -70,8 +72,12 @@ function legsFromSaved(legs: StrategyLegConfig[]): CustomLeg[] {
       limit_price: leg.limit_price ?? '',
       size: leg.size,
       exit_if_enabled: leg.exit_if_enabled ?? false,
-    }),
-  );
+      exit_if_low: leg.exit_if_low != null ? String(leg.exit_if_low) : '',
+      exit_if_high: leg.exit_if_high != null ? String(leg.exit_if_high) : '',
+      exit_if_low_dirty: hasLow,
+      exit_if_high_dirty: hasHigh,
+    });
+  });
 }
 
 interface Props {
@@ -163,6 +169,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
             entryCondition,
           })
         : {};
+      const legPreviews = await fetchLegPreviews(customLegs, cryptoAsset);
       await api.updateMyStrategy(strategy.id, {
         name: name.trim(),
         asset: cryptoAsset,
@@ -172,7 +179,7 @@ export function EditStrategyModal({ strategy, legs, onClose, onSaved }: Props) {
         entry_days: !isIndicators && !entryIfEnabled ? entryDaysForSave(entryDays) : [],
         entry_time: formatAmPmTime(entryHour, entryMinute, entryAmPm),
         end_time: formatAmPmTime(endHour, endMinute, endAmPm),
-        legs: legsToPayload(customLegs),
+        legs: legsToPayload(customLegs, legPreviews, cryptoAsset),
         trailing_profits,
         ...(total_profit_pct != null ? { total_profit_pct } : {}),
         ...(total_loss_pct != null ? { total_loss_pct } : {}),

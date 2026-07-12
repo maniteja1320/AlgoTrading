@@ -48,6 +48,20 @@ class StrategyLeg(BaseModel):
     limit_price: str | None = None
     size: int = Field(default=1, gt=0)
     exit_if_enabled: bool = False
+    exit_if_low: float | None = Field(default=None, gt=0)
+    exit_if_high: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_exit_if_bounds(self) -> "StrategyLeg":
+        if not self.exit_if_enabled:
+            return self
+        if self.exit_if_low is not None and self.exit_if_high is not None and self.exit_if_low >= self.exit_if_high:
+            raise ValueError("Exit if lower must be less than upper when both are set")
+        low_key = "exit_if_low" in self.model_fields_set
+        high_key = "exit_if_high" in self.model_fields_set
+        if low_key and high_key and self.exit_if_low is None and self.exit_if_high is None:
+            raise ValueError("Set at least one exit-if bound when exit if is enabled")
+        return self
 
 
 class TrailingProfitRule(BaseModel):

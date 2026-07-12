@@ -124,11 +124,13 @@ export interface StrategyLegConfig {
   limit_price?: string | null;
   size: number;
   exit_if_enabled?: boolean;
+  exit_if_low?: number | null;
+  exit_if_high?: number | null;
 }
 
 export interface LockedExitIf {
-  low: number;
-  high: number;
+  low?: number | null;
+  high?: number | null;
   symbol?: string;
   leg_index?: number;
   leg_entry_premium?: number;

@@ -9,12 +9,19 @@ import { formatExitConditions } from './ExitConditionsEditor';
 import { formatTrailingProfits } from './TrailingProfitEditor';
 import { normalizeCryptoAsset } from '../cryptoAssets';
 
+function strategyHasExitIf(s: SavedStrategy): boolean {
+  if (s.locked_exit_if && Object.keys(s.locked_exit_if).length > 0) return true;
+  return getStrategyLegs(s).some((leg) => leg.exit_if_enabled);
+}
+
 function formatStrategyExitSummary(s: SavedStrategy): string {
   const trail = formatTrailingProfits(s.trailing_profits);
   const pnl = formatExitConditions(s.total_profit_pct, s.total_loss_pct);
   const parts = [trail, pnl].filter(Boolean);
   if (s.strategy_template === 'indicators' && s.indicator === 'supertrend') {
-    return `trend flip (${s.supertrend_timeframe}), ${parts.join(', ') || '—'}, exit if, close all, end time on expiry`;
+    const extras = ['close all', 'end time on expiry'];
+    if (strategyHasExitIf(s)) extras.unshift('exit if');
+    return `trend flip (${s.supertrend_timeframe}), ${parts.join(', ') || '—'}, ${extras.join(', ')}`;
   }
   return parts.join(', ') || '—';
 }
@@ -38,9 +45,15 @@ function getStrategyLegs(s: SavedStrategy): StrategyLegConfig[] {
 }
 
 function formatExitIfDisplay(low?: number | null, high?: number | null): string {
-  if (low == null || high == null) return '';
-  const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  return `< $${fmt(low)} or > $${fmt(high)}`;
+  if (low == null && high == null) return '';
+  if (low != null && high != null) {
+    const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return `< $${fmt(low)} or > $${fmt(high)}`;
+  }
+  if (low != null) {
+    return `< $${low.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  }
+  return `> $${high!.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 }
 
 function formatLegSummary(
@@ -54,9 +67,11 @@ function formatLegSummary(
     : undefined;
   let exit = '';
   if (lock) {
-    exit = ` · Exit if ${formatExitIfDisplay(lock.low, lock.high)} (locked)`;
+    const band = formatExitIfDisplay(lock.low, lock.high);
+    exit = band ? ` · Exit if ${band} (locked)` : '';
   } else if (leg.exit_if_enabled) {
-    exit = ' · Exit if enabled (locked at entry)';
+    const band = formatExitIfDisplay(leg.exit_if_low, leg.exit_if_high);
+    exit = band ? ` · Exit if ${band}` : ' · Exit if enabled (locked at entry)';
   }
   const expiryLabel = expirySlotLabel(leg.expiry_slot, activeExpiries);
   return `Leg ${index + 1}: ${leg.option_type.toUpperCase()} · ${leg.strike_type ?? 'ATM'} · ${expiryLabel} · ${leg.side} · ${leg.size}${exit}`;

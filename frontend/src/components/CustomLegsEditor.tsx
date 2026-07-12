@@ -15,12 +15,52 @@ export interface CustomLeg {
   limit_price: string;
   size: number;
   exit_if_enabled: boolean;
+  exit_if_low: string;
+  exit_if_high: string;
+  exit_if_low_dirty: boolean;
+  exit_if_high_dirty: boolean;
 }
 
 interface LegPreviewData {
   atm_strike: number;
   mark_price: number;
   symbol: string;
+}
+
+export async function fetchLegPreviews(
+  legs: CustomLeg[],
+  asset: CryptoAsset = 'BTC',
+): Promise<Record<string, LegPreviewData>> {
+  const entries = await Promise.all(
+    legs.map(async (leg) => {
+      try {
+        const p = await api.getCustomPreview(leg.option_type, leg.expiry_slot, asset);
+        return [
+          leg.uid,
+          {
+            atm_strike: p.atm_strike,
+            mark_price: parseFloat(p.mark_price) || 0,
+            symbol: p.symbol,
+          },
+        ] as const;
+      } catch {
+        return [leg.uid, null] as const;
+      }
+    }),
+  );
+  const next: Record<string, LegPreviewData> = {};
+  for (const [uid, data] of entries) {
+    if (data) next[uid] = data;
+  }
+  return next;
+}
+
+function combinedPremiumFromPreviews(legs: CustomLeg[], previews: Record<string, LegPreviewData>): number {
+  return legs.reduce((sum, leg) => {
+    const preview = previews[leg.uid];
+    if (!preview) return sum;
+    return sum + legPremium(leg, preview.mark_price);
+  }, 0);
 }
 
 export function createLeg(overrides?: Partial<Omit<CustomLeg, 'uid'>>): CustomLeg {
@@ -34,6 +74,10 @@ export function createLeg(overrides?: Partial<Omit<CustomLeg, 'uid'>>): CustomLe
     limit_price: '',
     size: 1,
     exit_if_enabled: false,
+    exit_if_low: '',
+    exit_if_high: '',
+    exit_if_low_dirty: false,
+    exit_if_high_dirty: false,
     ...overrides,
   };
 }
@@ -44,6 +88,77 @@ function legPremium(leg: CustomLeg, markPrice: number): number {
     if (!Number.isNaN(limit)) return limit;
   }
   return markPrice;
+}
+
+function resolvedExitIfLow(leg: CustomLeg, exitPreview: { low: number; high: number } | null): string {
+  if (!leg.exit_if_enabled) return '';
+  if (leg.exit_if_low_dirty) return leg.exit_if_low;
+  return exitPreview ? String(exitPreview.low) : leg.exit_if_low;
+}
+
+function resolvedExitIfHigh(leg: CustomLeg, exitPreview: { low: number; high: number } | null): string {
+  if (!leg.exit_if_enabled) return '';
+  if (leg.exit_if_high_dirty) return leg.exit_if_high;
+  return exitPreview ? String(exitPreview.high) : leg.exit_if_high;
+}
+
+export function parseExitIfForLeg(
+  leg: CustomLeg,
+  defaults: { low: number; high: number } | null,
+): Pick<StrategyLegConfig, 'exit_if_enabled' | 'exit_if_low' | 'exit_if_high'> {
+  if (!leg.exit_if_enabled) {
+    return { exit_if_enabled: false };
+  }
+  const lowTrim = resolvedExitIfLow(leg, defaults).trim();
+  const highTrim = resolvedExitIfHigh(leg, defaults).trim();
+  if (!lowTrim && !highTrim) {
+    throw new Error('Set at least one exit-if bound or leave both auto-filled from preview');
+  }
+  const payload: Pick<StrategyLegConfig, 'exit_if_enabled' | 'exit_if_low' | 'exit_if_high'> = {
+    exit_if_enabled: true,
+  };
+  if (!lowTrim) {
+    payload.exit_if_low = null;
+  } else {
+    const lowN = parseFloat(lowTrim);
+    if (Number.isNaN(lowN) || lowN <= 0) {
+      throw new Error('Enter a valid exit-if lower price');
+    }
+    if (!leg.exit_if_low_dirty && defaults && lowN === defaults.low) {
+      // Auto preview value — recompute from actual entry fill at lock time.
+    } else {
+      payload.exit_if_low = lowN;
+    }
+  }
+  if (!highTrim) {
+    payload.exit_if_high = null;
+  } else {
+    const highN = parseFloat(highTrim);
+    if (Number.isNaN(highN) || highN <= 0) {
+      throw new Error('Enter a valid exit-if upper price');
+    }
+    if (!leg.exit_if_high_dirty && defaults && highN === defaults.high) {
+      // Auto preview value — recompute from actual entry fill at lock time.
+    } else {
+      payload.exit_if_high = highN;
+    }
+  }
+  if (
+    payload.exit_if_low === null &&
+    payload.exit_if_high === null &&
+    'exit_if_low' in payload &&
+    'exit_if_high' in payload
+  ) {
+    throw new Error('Set at least one exit-if bound when exit if is enabled');
+  }
+  if (
+    payload.exit_if_low != null &&
+    payload.exit_if_high != null &&
+    payload.exit_if_low >= payload.exit_if_high
+  ) {
+    throw new Error('Exit if lower must be less than upper when both are set');
+  }
+  return payload;
 }
 
 export function defaultExitIf(
@@ -101,28 +216,7 @@ export function CustomLegsEditor({ legs, activeExpiries, asset = 'BTC', onChange
   );
 
   const fetchPreviews = useCallback(async (currentLegs: CustomLeg[]) => {
-    const entries = await Promise.all(
-      currentLegs.map(async (leg) => {
-        try {
-          const p = await api.getCustomPreview(leg.option_type, leg.expiry_slot, asset);
-          return [
-            leg.uid,
-            {
-              atm_strike: p.atm_strike,
-              mark_price: parseFloat(p.mark_price) || 0,
-              symbol: p.symbol,
-            },
-          ] as const;
-        } catch {
-          return [leg.uid, null] as const;
-        }
-      }),
-    );
-    const next: Record<string, LegPreviewData> = {};
-    for (const [uid, data] of entries) {
-      if (data) next[uid] = data;
-    }
-    setPreviews(next);
+    setPreviews(await fetchLegPreviews(currentLegs, asset));
   }, [asset]);
 
   useEffect(() => {
@@ -152,7 +246,15 @@ export function CustomLegsEditor({ legs, activeExpiries, asset = 'BTC', onChange
 
   const toggleExitIf = (uid: string) => {
     const leg = legs.find((l) => l.uid === uid);
-    if (leg) updateLeg(uid, { exit_if_enabled: !leg.exit_if_enabled });
+    if (!leg) return;
+    const nextEnabled = !leg.exit_if_enabled;
+    updateLeg(uid, {
+      exit_if_enabled: nextEnabled,
+      exit_if_low: '',
+      exit_if_high: '',
+      exit_if_low_dirty: false,
+      exit_if_high_dirty: false,
+    });
   };
 
   const removeLeg = (uid: string) => {
@@ -339,23 +441,30 @@ export function CustomLegsEditor({ legs, activeExpiries, asset = 'BTC', onChange
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                     <input
                       className="input mono"
-                      type="text"
-                      readOnly
-                      value={exitPreview && leg.exit_if_enabled ? String(exitPreview.low) : ''}
+                      type="number"
+                      min={0}
+                      disabled={!leg.exit_if_enabled}
+                      value={resolvedExitIfLow(leg, exitPreview)}
+                      onChange={(e) =>
+                        updateLeg(leg.uid, { exit_if_low: e.target.value, exit_if_low_dirty: true })
+                      }
                       placeholder="Exit if below"
                     />
                     <input
                       className="input mono"
-                      type="text"
-                      readOnly
-                      value={exitPreview && leg.exit_if_enabled ? String(exitPreview.high) : ''}
+                      type="number"
+                      min={0}
+                      disabled={!leg.exit_if_enabled}
+                      value={resolvedExitIfHigh(leg, exitPreview)}
+                      onChange={(e) =>
+                        updateLeg(leg.uid, { exit_if_high: e.target.value, exit_if_high_dirty: true })
+                      }
                       placeholder="Exit if above"
                     />
                   </div>
                   <p className="hint" style={{ marginTop: 6 }}>
-                    Preview uses current mark prices. At entry, combined premium = sum of each leg&apos;s fill entry
-                    price (not multiplied by size). Exit-if levels lock from that combined premium and entry ATM when
-                    all legs are filled.
+                    Preview uses current mark prices. Edit either bound or leave blank for one-sided exit only. At
+                    entry, auto-filled values lock from actual fill premium unless you override them here.
                   </p>
                 </div>
 
@@ -373,15 +482,40 @@ export function CustomLegsEditor({ legs, activeExpiries, asset = 'BTC', onChange
   );
 }
 
-export function legsToPayload(legs: CustomLeg[]): StrategyLegConfig[] {
-  return legs.map(({ uid, limit_price, exit_if_enabled, ...leg }) => ({
-    option_type: leg.option_type,
-    strike_type: leg.strike_type,
-    expiry_slot: leg.expiry_slot,
-    side: leg.side,
-    order_type: leg.order_type,
-    size: leg.size,
-    exit_if_enabled,
-    ...(leg.order_type === 'limit_order' && limit_price ? { limit_price } : {}),
-  }));
+export function legsToPayload(
+  legs: CustomLeg[],
+  previews: Record<string, LegPreviewData>,
+  asset: CryptoAsset = 'BTC',
+): StrategyLegConfig[] {
+  const combinedPremium = combinedPremiumFromPreviews(legs, previews);
+  return legs.map(({ uid, limit_price, exit_if_enabled, exit_if_low, exit_if_high, exit_if_low_dirty, exit_if_high_dirty, ...leg }) => {
+    const preview = previews[uid];
+    const defaults =
+      preview && combinedPremium > 0
+        ? defaultExitIf(preview.atm_strike, combinedPremium, asset)
+        : null;
+    const exitIf = parseExitIfForLeg(
+      {
+        uid,
+        ...leg,
+        limit_price,
+        exit_if_enabled,
+        exit_if_low,
+        exit_if_high,
+        exit_if_low_dirty,
+        exit_if_high_dirty,
+      },
+      defaults,
+    );
+    return {
+      option_type: leg.option_type,
+      strike_type: leg.strike_type,
+      expiry_slot: leg.expiry_slot,
+      side: leg.side,
+      order_type: leg.order_type,
+      size: leg.size,
+      ...exitIf,
+      ...(leg.order_type === 'limit_order' && limit_price ? { limit_price } : {}),
+    };
+  });
 }

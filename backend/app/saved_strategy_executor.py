@@ -2,7 +2,14 @@ from typing import Any
 
 from app.assets import normalize_asset
 from app.delta_service import DeltaService
-from app.exit_if_utils import combined_entry_premium, compute_exit_if_bounds, leg_entry_premium
+from app.exit_if_utils import (
+    combined_entry_premium,
+    format_exit_if_bounds,
+    futures_inside_exit_if_range,
+    futures_outside_exit_if_bounds,
+    leg_entry_premium,
+    resolve_exit_if_bounds,
+)
 from app.my_strategy_store import (
     append_log,
     clear_locked_exit_if,
@@ -551,13 +558,15 @@ def _try_lock_exit_if(
         return
 
     new_locks: dict[str, Any] = {}
-    for _cfg, leg in pending:
+    for cfg, leg in pending:
         pid = str(leg["product_id"])
         pos = positions_map.get(int(leg["product_id"]))
         if not pos:
             continue
         entry_atm = float(leg["atm_strike"])
-        low, high = compute_exit_if_bounds(entry_atm, combined, asset=_strategy_asset(saved))
+        low, high = resolve_exit_if_bounds(cfg, entry_atm, combined, asset=_strategy_asset(saved))
+        if low is None and high is None:
+            continue
         new_locks[pid] = {
             "low": low,
             "high": high,
@@ -573,9 +582,10 @@ def _try_lock_exit_if(
             if pid not in new_locks:
                 continue
             bounds = new_locks[pid]
+            band = format_exit_if_bounds(bounds.get("low"), bounds.get("high"))
             append_log(
                 sid,
-                f"Exit if locked for {leg.get('symbol')}: < ${bounds['low']:,.0f} or > ${bounds['high']:,.0f} "
+                f"Exit if locked for {leg.get('symbol')}: {band} "
                 f"(entry ATM ${bounds['entry_atm_strike']:,.0f})",
             )
         set_locked_exit_if(sid, new_locks, combined)
@@ -632,8 +642,11 @@ def _futures_in_exit_if_range(saved: dict[str, Any], futures_price: float) -> bo
         return True
 
     bounds = next(iter(locked.values()))
-    low_f, high_f = float(bounds["low"]), float(bounds["high"])
-    return low_f < futures_price < high_f
+    low_f = bounds.get("low")
+    high_f = bounds.get("high")
+    low = float(low_f) if low_f is not None else None
+    high = float(high_f) if high_f is not None else None
+    return futures_inside_exit_if_range(futures_price, low, high)
 
 
 def _check_exit_if_price(
@@ -658,19 +671,23 @@ def _check_exit_if_price(
     if positions_map is None:
         positions_map = _open_positions_map(delta)
 
-    breach: tuple[str, dict[str, Any], float, float] | None = None
+    breach: tuple[str, dict[str, Any], float | None, float | None] | None = None
     for pid, bounds in locked.items():
         if not positions_map.get(int(pid)):
             continue
-        low_f, high_f = float(bounds["low"]), float(bounds["high"])
-        if futures_price <= low_f or futures_price >= high_f:
-            breach = (pid, bounds, low_f, high_f)
+        low_f = bounds.get("low")
+        high_f = bounds.get("high")
+        low = float(low_f) if low_f is not None else None
+        high = float(high_f) if high_f is not None else None
+        if futures_outside_exit_if_bounds(futures_price, low, high):
+            breach = (pid, bounds, low, high)
             break
 
     if not breach:
         return False
 
     pid, bounds, low_f, high_f = breach
+    band = format_exit_if_bounds(low_f, high_f)
     try:
         results = square_off_all_legs(
             delta,
@@ -684,7 +701,7 @@ def _check_exit_if_price(
             clear_locked_exit_if(sid)
             append_log(
                 sid,
-                f"Exit if: {asset} ${futures_price:,.0f} outside (${low_f:,.0f}–${high_f:,.0f}) "
+                f"Exit if: {asset} ${futures_price:,.0f} outside ({band}) "
                 f"— squared off {len(results)} leg(s)",
             )
             for r in results:
@@ -692,7 +709,7 @@ def _check_exit_if_price(
             return True
         append_log(
             sid,
-            f"Exit if breach ({asset} ${futures_price:,.0f} vs ${low_f:,.0f}–${high_f:,.0f}) "
+            f"Exit if breach ({asset} ${futures_price:,.0f} vs {band}) "
             f"but no open positions found to close",
         )
     except Exception as e:
