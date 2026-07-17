@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -67,9 +68,11 @@ def _poll_interval_seconds() -> float:
 
 
 async def _run_saved_strategy_loop() -> None:
+    consecutive_store_errors = 0
     while True:
         try:
             await asyncio.sleep(_poll_interval_seconds())
+            consecutive_store_errors = 0
             running = get_running_strategies()
             if not running:
                 continue
@@ -88,8 +91,19 @@ async def _run_saved_strategy_loop() -> None:
                 if isinstance(result, Exception):
                     logger.exception("Saved strategy runner error for %s", saved.get("id"))
                     append_log(saved["id"], f"Error: {result}")
+        except json.JSONDecodeError as e:
+            consecutive_store_errors += 1
+            wait = min(30.0, 2.0 * consecutive_store_errors)
+            if consecutive_store_errors <= 3 or consecutive_store_errors % 20 == 0:
+                logger.error(
+                    "Saved strategy store JSON error (will retry in %.0fs): %s",
+                    wait,
+                    e,
+                )
+            await asyncio.sleep(wait)
         except Exception as e:
             logger.exception("Saved strategy runner error: %s", e)
+            await asyncio.sleep(2.0)
 
 
 @asynccontextmanager
