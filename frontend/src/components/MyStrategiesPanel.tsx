@@ -23,6 +23,9 @@ function formatStrategyExitSummary(s: SavedStrategy): string {
     if (strategyHasExitIf(s)) extras.unshift('exit if');
     return `trend flip (${s.supertrend_timeframe}), ${parts.join(', ') || '—'}, ${extras.join(', ')}`;
   }
+  if (strategyHasExitIf(s)) {
+    parts.push('exit if');
+  }
   return parts.join(', ') || '—';
 }
 
@@ -62,16 +65,17 @@ function formatLegSummary(
   activeExpiries: string[],
   lockedExitIf?: Record<string, LockedExitIf>,
 ) {
-  const lock = lockedExitIf
-    ? Object.values(lockedExitIf).find((l) => l.leg_index === index + 1)
-    : undefined;
+  const locks = lockedExitIf ? Object.values(lockedExitIf) : [];
+  const lock =
+    locks.find((l) => l.leg_index === index + 1) ??
+    (locks.length === 1 && index === 0 ? locks[0] : undefined);
   let exit = '';
   if (lock) {
     const band = formatExitIfDisplay(lock.low, lock.high);
     exit = band ? ` · Exit if ${band} (locked)` : '';
   } else if (leg.exit_if_enabled) {
     const band = formatExitIfDisplay(leg.exit_if_low, leg.exit_if_high);
-    exit = band ? ` · Exit if ${band}` : ' · Exit if enabled (locked at entry)';
+    exit = band ? ` · Exit if ${band}` : ' · Exit if enabled (locking at fill…)';
   }
   const expiryLabel = expirySlotLabel(leg.expiry_slot, activeExpiries);
   return `Leg ${index + 1}: ${leg.option_type.toUpperCase()} · ${leg.strike_type ?? 'ATM'} · ${expiryLabel} · ${leg.side} · ${leg.size}${exit}`;

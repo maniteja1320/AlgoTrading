@@ -48,6 +48,14 @@ def _validate_strategy_body(body: SavedStrategyCreate) -> dict:
         payload.pop("entry_if_high", None)
     if body.strategy_template == "indicators":
         payload["entry_if_enabled"] = False
+    for leg in payload.get("legs") or []:
+        if not leg.get("exit_if_enabled"):
+            leg.pop("exit_if_low", None)
+            leg.pop("exit_if_high", None)
+        elif leg.get("exit_if_low") is None and leg.get("exit_if_high") is None:
+            # No manual override — omit so lock-time uses calculated ATM ± premium bounds.
+            leg.pop("exit_if_low", None)
+            leg.pop("exit_if_high", None)
     return payload
 
 

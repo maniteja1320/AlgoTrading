@@ -43,6 +43,11 @@ def resolve_exit_if_bounds(
     else:
         high = round(float(leg_cfg["exit_if_high"]))
 
+    # Both null usually means Pydantic persisted defaults (no override), not one-sided blank.
+    # Use calculated bounds so exit-if still locks after entry.
+    if low is None and high is None:
+        return calc_low, calc_high
+
     return low, high
 
 

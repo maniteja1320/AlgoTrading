@@ -1032,6 +1032,8 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
 
     _persist_entry_legs(sid, saved, resolved_legs, leg_configs, positions_map)
     _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
+    saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
     _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
     saved = get_strategy_by_id(sid) or saved
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
@@ -1254,4 +1256,6 @@ def execute_saved_strategy_tick(saved: dict[str, Any], delta: DeltaService) -> N
     saved = get_strategy_by_id(sid) or saved
     monitoring_legs = _monitoring_legs(saved, resolved_legs)
     _try_lock_combined_entry_premium(saved, monitoring_legs, positions_map)
+    saved = get_strategy_by_id(sid) or saved
+    monitoring_legs = _monitoring_legs(saved, resolved_legs)
     _try_lock_exit_if(saved, delta, monitoring_legs, leg_configs, positions_map)
